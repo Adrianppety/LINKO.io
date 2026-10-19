@@ -1,0 +1,146 @@
+const express = require('express');
+const http = require('http');
+const path = require('node:path');
+const socketIo = require('socket.io');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+const { SettingsStore, createReportsRouter } = require('./settingsStore');
+const { AuthService, createAuthRouter } = require('./auth');
+const { createEmailService } = require('./emailService');
+
+const app = express();
+const server = http.createServer(app);
+const databasePath = process.env.LINKO_DATABASE_PATH ? path.resolve(__dirname, process.env.LINKO_DATABASE_PATH) : path.join(__dirname, 'data', 'linko.sqlite');
+const filesDirectory = process.env.LINKO_FILES_PATH ? path.resolve(__dirname, process.env.LINKO_FILES_PATH) : path.join(__dirname, 'data', 'files');
+const settingsStore = new SettingsStore(databasePath);
+const authService = new AuthService({ store: settingsStore, mailer: createEmailService(), filesDirectory });
+const io = socketIo(server, { cors: { origin: [...authService.allowedOrigins], credentials: true, methods: ['GET', 'POST'] } });
+const allowedOrigins = authService.allowedOrigins;
+app.use(express.json({ limit: '2mb' }));
+app.use(express.static(path.join(__dirname, '../client/public')));
+app.use(express.static(path.join(__dirname, '../client')));
+app.use('/api', createAuthRouter(authService, { io }));
+app.use('/api/reports', createReportsRouter(settingsStore, {}, authService));
+
+const PORT = process.env.PORT || 3000;
+
+// Store active rooms and users
+const rooms = new Map();
+
+io.use((socket, next) => {
+  const user = authService.getSocketUser(socket.handshake.headers.cookie);
+  if (!user) return next(new Error('session_required'));
+  socket.data.user = { id: user.id, nickname: user.nickname, displayName: user.display_name };
+  return next();
+});
+
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.join(`user:${socket.data.user.id}`);
+  socket.on('leave-room', (conversationId) => {
+    if (typeof conversationId !== 'string' || !socket.rooms.has(conversationId)) return;
+    socket.leave(conversationId);
+    const roomUsers = rooms.get(conversationId);
+    roomUsers?.delete(socket.id);
+    socket.to(conversationId).emit('user-disconnected', socket.id);
+    if (roomUsers?.size === 0) rooms.delete(conversationId);
+  });
+
+  socket.on('join-room', (conversationId) => {
+    if (typeof conversationId !== 'string' || !authService.isConversationMember(conversationId, socket.data.user.id)) {
+      socket.emit('room-error', { code: 'conversation_forbidden' });
+      return;
+    }
+    socket.join(conversationId);
+
+    if (!rooms.has(conversationId)) {
+      rooms.set(conversationId, new Set());
+    }
+
+    const roomUsers = rooms.get(conversationId);
+    roomUsers.add(socket.id);
+
+    socket.to(conversationId).emit('user-connected', socket.data.user.nickname, socket.id);
+
+    const existingUsers = Array.from(roomUsers).filter(id => id !== socket.id).map(id => {
+      const peer = io.sockets.sockets.get(id);
+      return peer ? { id: peer.data.user.id, nickname: peer.data.user.nickname, socketId: id } : null;
+    }).filter(Boolean);
+    socket.emit('room-users', existingUsers);
+
+    console.log(`User ${socket.data.user.nickname} joined conversation ${conversationId}`);
+  });
+
+  socket.on('offer', (conversationId, offer) => {
+    if (!socket.rooms.has(conversationId)) return;
+    socket.to(conversationId).emit('offer', offer, socket.id, socket.id);
+  });
+
+  socket.on('answer', (conversationId, answer, _clientSender, targetSocketId) => {
+    if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
+    io.to(targetSocketId).emit('answer', answer, socket.id, socket.id);
+  });
+
+  socket.on('ice-candidate', (conversationId, candidate, _clientSender, targetSocketId) => {
+    if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
+    io.to(targetSocketId).emit('ice-candidate', candidate, socket.id, socket.id);
+  });
+
+  socket.on('input-event', (conversationId, eventData) => {
+    if (!socket.rooms.has(conversationId) || !eventData || typeof eventData !== 'object') return;
+    socket.to(conversationId).emit('input-event', eventData, socket.data.user.nickname);
+  });
+
+  // Handle user leaving
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+
+    // Remove user from all rooms
+    rooms.forEach((userSet, roomId) => {
+      if (userSet.has(socket.id)) {
+        userSet.delete(socket.id);
+        // Notify others in the room
+        socket.to(roomId).emit('user-disconnected', socket.id);
+
+        // Clean up empty rooms
+        if (userSet.size === 0) {
+          rooms.delete(roomId);
+        }
+      }
+    });
+  });
+
+  socket.on('chat-message', (conversationId, message) => {
+    if (!socket.rooms.has(conversationId) || typeof message !== 'string') return;
+    const content = message.trim();
+    if (!content || content.length > 5000) return;
+    const id = require('node:crypto').randomUUID();
+    const createdAt = new Date().toISOString();
+    try {
+      authService.db.prepare('INSERT INTO messages (id,conversation_id,sender_user_id,content,created_at) VALUES (?,?,?,?,?)')
+        .run(id,conversationId,socket.data.user.id,content,createdAt);
+      io.to(conversationId).emit('chat-message', content, socket.data.user.nickname, { id, createdAt });
+    } catch (error) {
+      console.error('Message persistence failed:', error.message);
+      socket.emit('message-error', { code: 'message_unavailable' });
+    }
+  });
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  if (error.type === 'entity.too.large') {
+    return res.status(413).json({ error: { code: 'payload_too_large', message: 'O envio excede o limite permitido.' } });
+  }
+  if (error instanceof SyntaxError && Object.hasOwn(error, 'body')) {
+    return res.status(400).json({ error: { code: 'invalid_json', message: 'O corpo da requisição não é um JSON válido.' } });
+  }
+  console.error('HTTP request failed:', error.message);
+  return res.status(500).json({ error: { code: 'internal_error', message: 'Não foi possível concluir a solicitação.' } });
+});
+
+server.listen(PORT, () => {
+  console.log(`Signaling server running on port ${PORT}`);
+});
+
+module.exports = { io, authService, settingsStore };
