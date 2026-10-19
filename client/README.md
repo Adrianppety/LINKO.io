@@ -2,6 +2,8 @@
 
 The web interface lives in `client/index.html` and can be opened directly or served by Vite. Socket.IO's browser client is loaded from its CDN; when opened as a local file, signaling and reports default to `http://localhost:3000`.
 
+For a separate backend, set `VITE_API_URL` to its origin before building. Vercel requires this value and uses it for both API requests and Socket.IO signaling.
+
 ```powershell
 npm install
 npm run dev

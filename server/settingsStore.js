@@ -96,8 +96,9 @@ class SettingsStore {
   close() { this.database.close(); }
 }
 
-function isAllowedOrigin(origin) {
+function isAllowedOrigin(origin, allowedOrigins) {
   if (!origin || origin === 'null') return true;
+  if (allowedOrigins?.has(origin)) return true;
   try {
     const url = new URL(origin);
     return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -111,7 +112,7 @@ function createReportsRouter(store, { now = Date.now, limit = 3, windowMs = 60 *
   const requests = new Map();
   router.use((req, res, next) => {
     const origin = req.get('origin');
-    if (!isAllowedOrigin(origin)) return res.status(403).json({ error: { code: 'origin_denied', message: 'Origem não permitida.' } });
+    if (!isAllowedOrigin(origin, authService?.allowedOrigins)) return res.status(403).json({ error: { code: 'origin_denied', message: 'Origem não permitida.' } });
     if (origin) {
       res.set('Access-Control-Allow-Origin', origin);
       res.set('Vary', 'Origin');

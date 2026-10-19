@@ -165,12 +165,14 @@ class AuthService {
       VALUES (?,?,?,?,?,?)`).run(tokenHash(token), user.id, createdAt, createdAt, expiresAt,
       String(req.get('user-agent') || '').slice(0, 300));
     const secure = this.env.NODE_ENV === 'production' ? '; Secure' : '';
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ttlDays * 86400}${secure}`);
+    const sameSite = secure ? 'None' : 'Lax';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${ttlDays * 86400}${secure}`);
   }
 
   clearCookie(res) {
     const secure = this.env.NODE_ENV === 'production' ? '; Secure' : '';
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+    const sameSite = secure ? 'None' : 'Lax';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure}`);
   }
 
   isConversationMember(conversationId, userId) {

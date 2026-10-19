@@ -39,6 +39,25 @@ test('registration does not create pending accounts without configured email del
   assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM pending_signups').get().total, 0);
 });
 
+test('production session cookies support the separate Vercel frontend', () => {
+  const store = new SettingsStore(':memory:');
+  const auth = new AuthService({ store, env: { NODE_ENV: 'production' } });
+  const responseHeaders = {};
+  const now = new Date().toISOString();
+  store.database.prepare(`INSERT INTO users
+    (id,display_name,nickname,email_normalized,password_hash,email_verified_at,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,'active',?,?)`)
+    .run('user-1','Test User','test_user','test@example.test','hash',now,now,now);
+  auth.issueSession(
+    { id: 'user-1' },
+    { get: () => 'test-agent' },
+    { setHeader: (name, value) => { responseHeaders[name] = value; } }
+  );
+  assert.match(responseHeaders['Set-Cookie'], /SameSite=None/);
+  assert.match(responseHeaders['Set-Cookie'], /; Secure/);
+  store.close();
+});
+
 test('email verification, login, session, preferences, and private conversation membership work', async t => {
   const sentCodes = new Map();
   const mailer = {

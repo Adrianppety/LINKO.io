@@ -10,6 +10,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.socket.io/4.8.4/socket.io.min.js"></script>
+  <script>
+    window.LINKO_API_URL = "__LINKO_API_URL__";
+    if (window.LINKO_API_URL === "__LINKO_API_URL__") window.LINKO_API_URL = "";
+    window.LINKO_SIGNALING_URL = window.LINKO_API_URL;
+  </script>
   <script src="https://unpkg.com/simple-peer@9.11.0/dist/simplepeer.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>

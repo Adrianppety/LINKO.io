@@ -67,3 +67,22 @@ test('report API accepts local clients, rejects remote origins and rate limits s
   const denied = await post('https://attacker.invalid');
   assert.equal(denied.status, 403);
 });
+
+test('report API accepts the configured frontend origin', async t => {
+  const store = new SettingsStore(':memory:');
+  const app = express();
+  app.use(express.json({ limit: '2mb' }));
+  app.use('/api/reports', createReportsRouter(store, {}, {
+    allowedOrigins: new Set(['https://linko-preview.vercel.app']),
+    getRequestUser: () => null
+  }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.close(); store.close(); });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/reports`, {
+    method: 'POST',
+    headers: { Origin: 'https://linko-preview.vercel.app', 'Content-Type': 'application/json' },
+    body: JSON.stringify(validReport)
+  });
+  assert.equal(response.status, 201);
+});

@@ -14,15 +14,20 @@ const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefi
 let server;
 let io;
 
-if (!isVercel) {
-  server = http.createServer(app);
-  io = socketIo(server, {
-    cors: {
-      origin: [], // Will be set after authService is initialized
-      credentials: true,
-      methods: ['GET', 'POST']
+if (process.env.RENDER === 'true') {
+  const requiredEnvironment = ['NODE_ENV', 'LINKO_DATABASE_PATH', 'LINKO_FILES_PATH', 'APP_BASE_URL', 'ALLOWED_ORIGINS'];
+  const missingEnvironment = requiredEnvironment.filter(name => !process.env[name]?.trim());
+  if (missingEnvironment.length) {
+    throw new Error(`Configure no Render as variáveis obrigatórias: ${missingEnvironment.join(', ')}.`);
+  }
+  if (process.env.NODE_ENV !== 'production') {
+    throw new Error('Configure NODE_ENV=production no Render para habilitar cookies seguros.');
+  }
+  for (const name of ['LINKO_DATABASE_PATH', 'LINKO_FILES_PATH']) {
+    if (!path.isAbsolute(process.env[name])) {
+      throw new Error(`${name} deve ser um caminho absoluto no disco persistente do Render.`);
     }
-  });
+  }
 }
 
 const databasePath = process.env.LINKO_DATABASE_PATH ? path.resolve(__dirname, process.env.LINKO_DATABASE_PATH) : path.join(__dirname, 'data', 'linko.sqlite');
@@ -30,22 +35,18 @@ const filesDirectory = process.env.LINKO_FILES_PATH ? path.resolve(__dirname, pr
 const settingsStore = new SettingsStore(databasePath);
 const authService = new AuthService({ store: settingsStore, mailer: createEmailService(), filesDirectory });
 
-// Update Socket.io CORS origins after authService is initialized
-if (!isVercel && io) {
-  io.engine.generateId = (req) => {
-    return authService.getSocketUser(req.headers.cookie) ? authService.getSocketUser(req.headers.cookie).id : req.id || '';
-  };
-
-  // Set CORS origins from authService
-  io.of("/").adapter.on("create-room", (room) => {
-    // Room creation logic if needed
+if (!isVercel) {
+  server = http.createServer(app);
+  io = socketIo(server, {
+    cors: {
+      origin: [...authService.allowedOrigins],
+      credentials: true,
+      methods: ['GET', 'POST']
+    }
   });
 
-  // Update CORS dynamically
-  io._cors = {
-    origin: [...authService.allowedOrigins],
-    credentials: true,
-    methods: ['GET', 'POST']
+  io.engine.generateId = (req) => {
+    return authService.getSocketUser(req.headers.cookie) ? authService.getSocketUser(req.headers.cookie).id : req.id || '';
   };
 }
 
@@ -70,6 +71,10 @@ if (!isVercel && io) {
   const rooms = new Map();
 
   io.use((socket, next) => {
+    const origin = socket.handshake.headers.origin;
+    if (origin && origin !== 'null' && !authService.allowedOrigins.has(origin)) {
+      return next(new Error('origin_denied'));
+    }
     const user = authService.getSocketUser(socket.handshake.headers.cookie);
     if (!user) return next(new Error('session_required'));
     socket.data.user = { id: user.id, nickname: user.nickname, displayName: user.display_name };
