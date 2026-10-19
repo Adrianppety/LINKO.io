@@ -20,6 +20,16 @@ const DEFAULT_PREFERENCES = Object.freeze({
 const DUMMY_SALT = Buffer.alloc(16, 0x4d).toString('hex');
 const DUMMY_HASH = crypto.scryptSync('linko-invalid-login-dummy', Buffer.from(DUMMY_SALT, 'hex'), 64, PASSWORD_PARAMS).toString('hex');
 
+// Invitations table schema:
+// CREATE TABLE IF NOT EXISTS invitations (
+//   id TEXT PRIMARY KEY,
+//   inviter_user_id TEXT NOT NULL,
+//   token TEXT NOT NULL UNIQUE,
+//   expires_at TEXT NOT NULL,
+//   created_at TEXT NOT NULL,
+//   FOREIGN KEY (inviter_user_id) REFERENCES users(id) ON DELETE CASCADE
+// );
+
 class AuthError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -104,6 +114,21 @@ class AuthService {
       'http://localhost:5173', 'http://localhost:5174',
       'http://127.0.0.1:5173', 'http://127.0.0.1:5174'
     ].join(',')).split(',').map(origin => origin.trim()).filter(Boolean));
+    // Ensure invitations table exists
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS invitations (
+        id TEXT PRIMARY KEY,
+        inviter_user_id TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (inviter_user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    // Index for faster lookup by token
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token)`);
+    // Index for cleanup by expiration
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_invitations_expires_at ON invitations(expires_at)`);
   }
 
   consumeLimit(kind, identity, limit, windowMs) {
@@ -127,6 +152,49 @@ class AuthService {
     }
     this.db.prepare('UPDATE auth_rate_limits SET attempts = attempts + 1 WHERE rate_key = ?').run(key);
     return true;
+  }
+
+  // Invitation methods
+  createInvitation(inviterUserId) {
+    const token = crypto.randomBytes(32).toString('base64url');
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const expiresAt = dateAfter(7 * 24 * 60 * 60 * 1000); // 7 days
+    this.db.prepare('INSERT INTO invitations (id, inviter_user_id, token, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, inviterUserId, token, expiresAt, now);
+    return token;
+  }
+
+  validateInvitationToken(token) {
+    const row = this.db.prepare('SELECT * FROM invitations WHERE token = ? AND expires_at > ?').get(token, new Date().toISOString());
+    return row || null;
+  }
+
+  acceptInvitation(token, inviteeUserId) {
+    const invitation = this.validateInvitationToken(token);
+    if (!invitation) {
+      throw new Error('Invalid or expired invitation');
+    }
+    // Prevent self-invitation
+    if (invitation.inviter_user_id === inviteeUserId) {
+      throw new Error('Cannot accept your own invitation');
+    }
+    const [low, high] = [invitation.inviter_user_id, inviteeUserId].sort();
+    const now = new Date().toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      // Create friendship if not exists
+      this.db.prepare('INSERT OR IGNORE INTO friendships (user_low_id, user_high_id, created_at) VALUES (?, ?, ?)')
+        .run(low, high, now);
+      // Create direct conversation
+      createDirectConversation(this.db, low, high, now);
+      // Delete invitation
+      this.db.prepare('DELETE FROM invitations WHERE id = ?').run(invitation.id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   getUserForToken(token) {
@@ -376,6 +444,31 @@ function createAuthRouter(auth, { io } = {}) {
     let saved = {};
     try { saved = JSON.parse(row?.preferences_json || '{}'); } catch {}
     return res.json({ preferences: { ...DEFAULT_PREFERENCES, ...saved } });
+  });
+
+  // Invitation routes
+  router.post('/auth/invite', auth.requireAuth.bind(auth), (req, res) => {
+    try {
+      const token = auth.createInvitation(req.user.id);
+      return res.status(201).json({
+        invitation_link: `${req.headers.origin || ''}/invite/${token}`
+      });
+    } catch (error) {
+      return res.status(500).json({ error: { code: 'invitation_failed', message: error.message } });
+    }
+  });
+
+  router.post('/auth/invite/accept', auth.requireAuth.bind(auth), async (req, res) => {
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: { code: 'invalid_token', message: 'Token is required' } });
+    }
+    try {
+      auth.acceptInvitation(token, req.user.id);
+      return res.json({ status: 'invitation_accepted' });
+    } catch (error) {
+      return res.status(400).json({ error: { code: 'invitation_invalid', message: error.message } });
+    }
   });
 
   router.put('/preferences', auth.requireAuth.bind(auth), (req, res) => {

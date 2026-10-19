@@ -131,8 +131,104 @@
     function renderDirectories(friends = [], conversations = []) { const friendList = $('[aria-label="Lista de amigos"]'); const groupList = $('[aria-label="Lista de grupos"]'); friendList?.replaceChildren(); groupList?.replaceChildren(); friends.forEach(friend => { if (!friend.conversation_id) return; friendList?.append(makeDirectoryButton({ type:'friend', id:friend.conversation_id, name:`@${friend.nickname}`, initials:friend.nickname.slice(0,2).toUpperCase(), detail:friend.display_name, online:false })); }); conversations.filter(item => item.kind === 'group').forEach(group => groupList?.append(makeDirectoryButton({ type:'group', id:group.id, name:group.title, initials:group.title.slice(0,2).toUpperCase(), detail:`${group.member_count} pessoas`, online:false }))); if (friendList && !friendList.children.length) { const empty=document.createElement('small'); empty.className='settings-help'; empty.textContent='Nenhum amigo ainda.'; friendList.append(empty); } if (groupList && !groupList.children.length) { const empty=document.createElement('small'); empty.className='settings-help'; empty.textContent='Nenhum grupo ainda.'; groupList.append(empty); } }
     async function loadAccountData() { if (!accountUser) return; const [profileResult,preferencesResult,friendsResult,conversationsResult] = await Promise.all([apiRequest('/api/profile'),apiRequest('/api/preferences'),apiRequest('/api/friends'),apiRequest('/api/conversations')]); const profile=profileResult.data.profile; accountUser=profile; userId=profile.nickname; settings={...settingsDefaults,...preferencesResult.data.preferences,displayName:profile.displayName,avatar:profile.avatarUrl?`${apiBase()}${profile.avatarUrl}`:'',cover:profile.coverUrl?`${apiBase()}${profile.coverUrl}`:''}; selectedTheme=settings.theme; setTheme(selectedTheme); applySettings(); const email=$('#account-email'); if(email) email.value=profile.email; const bio=$('#settings-bio'); if(bio) bio.value=profile.bio||''; renderDirectories(friendsResult.data.friends,conversationsResult.data.conversations); }
     async function loadAuthenticatedApp(user) { accountUser=user; userId=user.nickname; if(window.LinkoApp) window.LinkoApp.userId=user.nickname; settings.displayName=user.displayName; selectedTheme=settings.theme||'elegant-light'; setTheme(selectedTheme); updateMessagePermission(); $('#auth-gate').hidden=true; $('.app')?.classList.remove('auth-locked'); showHome(); try { await loadAccountData(); } catch(error) { if(error.status===401) return; toast('Não foi possível carregar seus dados. Tente novamente.'); } }
-    async function initializeAuthentication() { if (location.protocol === 'file:') { showAuth('login'); $('#auth-host-warning').hidden = false; $('#auth-message').textContent = 'Use http://localhost:3000 ou o aplicativo Electron para autenticar.'; return; } const resetToken = new URLSearchParams(location.search).get('reset'); if (resetToken) { $('#reset-token').value = resetToken; showAuth('reset'); return; } try { const { data } = await apiRequest('/api/auth/session'); await loadAuthenticatedApp(data.user); } catch (error) { showAuth('login', error.status === 401 ? '' : 'Servidor indisponível. Tente novamente.'); } }
+    async function initializeAuthentication() { if (location.protocol === 'file:') { showAuth('login'); $('#auth-host-warning').hidden = false; $('#auth-message').textContent = 'Use http://localhost:3000 ou o aplicativo Electron para autenticar.'; return; }
+
+      // Check for invitation token in URL
+      const inviteToken = new URLSearchParams(location.search).get('invite');
+      if (inviteToken) {
+        // Store invite token in session state for later use after authentication
+        sessionStorage.setItem('pendingInviteToken', inviteToken);
+
+        // If not authenticated, show auth gate
+        try {
+          const { data } = await apiRequest('/api/auth/session');
+          // User is authenticated, show invitation acceptance dialog
+          showInvitationAcceptanceDialog(inviteToken, data.user);
+          return;
+        } catch (error) {
+          // User not authenticated, show auth gate and handle invite after login
+          showAuth('login', '');
+          return;
+        }
+      }
+
+      const resetToken = new URLSearchParams(location.search).get('reset');
+      if (resetToken) {
+        $('#reset-token').value = resetToken;
+        showAuth('reset');
+        return;
+      }
+      try {
+        const { data } = await apiRequest('/api/auth/session');
+        await loadAuthenticatedApp(data.user);
+      } catch (error) {
+        showAuth('login', error.status === 401 ? '' : 'Servidor indisponível. Tente novamente.');
+      }
+    }
     function setAuthMessage(message, kind = '') { const status = $('#auth-message'); status.textContent = message; status.className = `auth-message${kind ? ` ${kind}` : ''}`; }
+
+    function showInvitationAcceptanceDialog(inviteToken, user) {
+      // Create modal backdrop
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.id = 'invite-modal-backdrop';
+
+      // Create modal content
+      const modal = document.createElement('div');
+      modal.className = 'theme-modal';
+      modal.id = 'invite-modal';
+      modal.innerHTML = `
+        <div class="modal-top">
+          <div>
+            <h2>Convite de Amizade</h2>
+            <p>Você recebeu um convite de amizade de <strong>@${user.nickname}</strong>.</p>
+          </div>
+          <button class="icon-btn" id="close-invite-modal" aria-label="Fechar convite">
+            <svg viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-green" id="accept-invite">Aceitar Convite</button>
+          <button class="btn btn-subtle" id="decline-invite">Recusar</button>
+        </div>
+      `;
+
+      // Add to document
+      document.body.appendChild(backdrop);
+      document.body.appendChild(modal);
+
+      // Handle button clicks
+      $('#accept-invite')?.addEventListener('click', async () => {
+        try {
+          await apiRequest('/api/auth/invite/accept', {
+            method: 'POST',
+            body: { token: inviteToken }
+          });
+          toast('Convite aceito! Agora vocês são amigos.');
+          // Clear the token from session storage
+          sessionStorage.removeItem('pendingInviteToken');
+          // Close modal
+          backdrop.remove();
+          modal.remove();
+          // Refresh friend list
+          try {
+            const { data } = await apiRequest('/api/friends');
+            renderDirectories(data.friends, []);
+          } catch (e) {
+            console.error('Failed to refresh friends:', e);
+          }
+        } catch (error) {
+          toast('Erro ao aceitar convite: ' + error.message);
+        }
+      });
+
+      $('#decline-invite, #close-invite-modal')?.addEventListener('click', () => {
+        backdrop.remove();
+        modal.remove();
+        // Clear the token from session storage
+        sessionStorage.removeItem('pendingInviteToken');
+      });
+    }
     let mediaTestStream = null;
     function persistSettings() { try { localStorage.setItem(settingsKey, JSON.stringify(settings)); applySettings(); return true; } catch { toast('Não foi possível salvar no armazenamento deste navegador'); return false; } }
     function applySettings() { $$('[data-setting]').forEach(input => { input.checked = Boolean(settings[input.dataset.setting]); }); $('#settings-display-name').value = settings.displayName; $('#settings-screen-size').value = String(settings.screenWidth); $('#settings-frame-rate').value = String(settings.frameRate); document.documentElement.dataset.reducedMotion = String(Boolean(settings.reducedMotion)); $('#current-theme-label').textContent = `Tema atual: ${settings.theme}`; const profileName = $('.profile-name strong'); if (profileName) profileName.textContent = `@${userId}`; const profileAvatar = $('.profile-main .avatar'); if (profileAvatar) { profileAvatar.textContent = userId.slice(0, 2).toUpperCase(); profileAvatar.style.backgroundImage = settings.avatar ? `url("${settings.avatar}")` : ''; profileAvatar.style.backgroundSize = 'cover'; } const avatarPreview = $('#settings-avatar-preview'); if (avatarPreview) avatarPreview.src = settings.avatar || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; const coverPreview = $('#settings-cover-preview'); if (coverPreview) coverPreview.src = settings.cover || 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; }
@@ -403,7 +499,28 @@
     $('#report-form')?.addEventListener('submit', async event => { event.preventDefault(); const status = $('#report-status'); const button = $('.settings-report-submit'); const screenshot = $('#report-image').files?.[0]; button.disabled = true; status.textContent = 'Enviando relato…'; try { const payload = { type: $('#report-type').value, title: $('#report-title').value.trim(), description: $('#report-description').value.trim(), steps: $('#report-steps').value.trim(), screenshot: screenshot ? await readLocalImage(screenshot, 1024 * 1024) : null }; if (payload.title.length < 4 || payload.description.length < 12) throw new Error('Informe título (mínimo 4) e descrição (mínimo 12 caracteres).'); const origin = window.LINKO_API_URL || (location.protocol === 'file:' ? 'http://localhost:3000' : location.port.startsWith('517') ? `${location.protocol}//${location.hostname}:3000` : location.origin); const response = await fetch(`${origin}/api/reports`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message || 'O servidor recusou o relato.'); status.textContent = `Relato salvo. Protocolo ${result.id}.`; $('#report-form').reset(); } catch (error) { status.textContent = error instanceof TypeError ? 'Servidor indisponível. O relato não foi salvo.' : error.message; } finally { button.disabled = false; } });
     $('#connect-btn')?.addEventListener('click', () => { window.LinkoApp.connectSignaling(); });
     $('#copy-link')?.addEventListener('click', async () => { const url = new URL(location.href); url.searchParams.set('room', roomId); try { await navigator.clipboard.writeText(url.href); toast('Link da sala copiado'); } catch { toast(url.href); } });
-    $('#invite-friends')?.addEventListener('click', () => $('#copy-link')?.click());
+    $('#invite-friends')?.addEventListener('click', async () => {
+      try {
+        // Check if user is authenticated first
+        const { data } = await apiRequest('/api/auth/session');
+        // User is authenticated, generate invitation link
+        const { data: inviteData } = await apiRequest('/api/auth/invite', { method: 'POST' });
+        // Show the invitation link in a toast and copy to clipboard
+        await navigator.clipboard.writeText(inviteData.invitation_link);
+        toast('Convite gerado e copiado para a área de transferência!');
+        // Also show the link in the toast for convenience
+        setTimeout(() => {
+          toast(inviteData.invitation_link);
+        }, 2500);
+      } catch (error) {
+        if (error.status === 401) {
+          // Not authenticated, show login
+          showAuth('login', 'Você precisa estar logado para gerar convites.');
+        } else {
+          toast('Erro ao gerar convite: ' + error.message);
+        }
+      }
+    });
     $('#add-friend')?.addEventListener('click', () => toast('Convide alguém pelo link da sala'));
     $('#add-contact')?.addEventListener('click', () => toast('Envie seu link para adicionar amigos'));
     $('#add-group')?.addEventListener('click', () => toast('Crie um grupo compartilhando um link de convite'));
