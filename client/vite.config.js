@@ -20,7 +20,7 @@ export default defineConfig({
   plugins: [{
     name: 'linko-backend-url',
     transformIndexHtml(html) {
-      return html.replaceAll('"__LINKO_API_URL__"', JSON.stringify(backendUrl))
+      return html.replace('"__LINKO_API_URL__"', JSON.stringify(backendUrl))
     }
   }]
 })
