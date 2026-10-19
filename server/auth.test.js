@@ -31,12 +31,20 @@ async function createTestApi(t, mailer = null) {
   return { store, auth, request };
 }
 
-test('registration does not create pending accounts without configured email delivery', async t => {
+test('registration creates an active session without email verification', async t => {
   const api = await createTestApi(t);
   const result = await api.request('/auth/register', { displayName: 'Alpha User', nickname: 'alpha_user', email: 'alpha@example.test', password: 'a-long-secure-password' });
-  assert.equal(result.response.status, 503);
-  assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM users').get().total, 0);
+  assert.equal(result.response.status, 201);
+  assert.ok(result.cookie?.startsWith('linko_session='));
+  assert.equal(result.data.user.emailVerified, false);
+  assert.equal((await api.request('/auth/session', undefined, result.cookie)).response.status, 200);
+  assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM users').get().total, 1);
+  assert.equal(api.store.database.prepare('SELECT email_verified_at FROM users WHERE email_normalized=?').get('alpha@example.test').email_verified_at, null);
+  assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM user_profiles').get().total, 1);
+  assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM user_preferences').get().total, 1);
   assert.equal(api.store.database.prepare('SELECT count(*) AS total FROM pending_signups').get().total, 0);
+  const duplicate = await api.request('/auth/register', { displayName: 'Another User', nickname: 'another_user', email: 'alpha@example.test', password: 'a-long-secure-password' });
+  assert.equal(duplicate.response.status, 409);
 });
 
 test('production session cookies support the separate Vercel frontend', () => {
@@ -45,9 +53,9 @@ test('production session cookies support the separate Vercel frontend', () => {
   const responseHeaders = {};
   const now = new Date().toISOString();
   store.database.prepare(`INSERT INTO users
-    (id,display_name,nickname,email_normalized,password_hash,email_verified_at,status,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,'active',?,?)`)
-    .run('user-1','Test User','test_user','test@example.test','hash',now,now,now);
+    (id,display_name,nickname,email_normalized,password_hash,email_registered_at,email_verified_at,status,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,'active',?,?)`)
+    .run('user-1','Test User','test_user','test@example.test','hash',now,now,now,now);
   auth.issueSession(
     { id: 'user-1' },
     { get: () => 'test-agent' },
@@ -58,28 +66,22 @@ test('production session cookies support the separate Vercel frontend', () => {
   store.close();
 });
 
-test('email verification, login, session, preferences, and private conversation membership work', async t => {
-  const sentCodes = new Map();
+test('registration, login, session, preferences, and private conversation membership work', async t => {
   const mailer = {
-    async sendVerification(email, code) { sentCodes.set(email, code); },
-    async sendPasswordReset(email, token) { sentCodes.set(email, token); }
+    async sendPasswordReset() {}
   };
   const api = await createTestApi(t, mailer);
-  async function registerAndVerify(displayName, nickname, email) {
+  async function register(displayName, nickname, email) {
     const registration = await api.request('/auth/register', { displayName, nickname, email, password: 'a-long-secure-password' });
-    assert.equal(registration.response.status, 202);
-    assert.equal(api.store.database.prepare('SELECT email_verified_at FROM users WHERE email_normalized=?').get(email.toLowerCase()), undefined);
-    const invalidCode = sentCodes.get(email) === '00000000' ? '00000001' : '00000000';
-    assert.equal((await api.request('/auth/verify-email', { email, code: invalidCode })).response.status, 400);
-    const verified = await api.request('/auth/verify-email', { email, code: sentCodes.get(email) });
-    assert.equal(verified.response.status, 201);
-    assert.ok(verified.cookie?.startsWith('linko_session='));
-    return verified.cookie;
+    assert.equal(registration.response.status, 201);
+    assert.equal(registration.data.user.emailVerified, false);
+    assert.ok(registration.cookie?.startsWith('linko_session='));
+    return registration.cookie;
   }
 
-  const alphaCookie = await registerAndVerify('Alpha User', 'alpha_user', 'alpha@example.test');
-  const betaCookie = await registerAndVerify('Beta User', 'beta_user', 'beta@example.test');
-  const outsiderCookie = await registerAndVerify('Other User', 'other_user', 'other@example.test');
+  const alphaCookie = await register('Alpha User', 'alpha_user', 'alpha@example.test');
+  const betaCookie = await register('Beta User', 'beta_user', 'beta@example.test');
+  const outsiderCookie = await register('Other User', 'other_user', 'other@example.test');
   assert.equal((await api.request('/auth/session', undefined, alphaCookie)).response.status, 200);
   const preferences = await api.request('/preferences', undefined, alphaCookie);
   assert.equal(preferences.response.status, 200);

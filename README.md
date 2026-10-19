@@ -20,7 +20,7 @@ NODE_ENV=production
 
 O servidor falha na inicialização no Render se essas variáveis estiverem ausentes ou se os caminhos do banco/arquivos não forem absolutos, em vez de iniciar silenciosamente usando o armazenamento efêmero do código.
 
-Adicione as configurações SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` e `SMTP_FROM`) no Render para habilitar confirmação de conta e redefinição de senha. Mantenha o serviço Render em uma instância ao usar um único disco persistente e salas Socket.IO em memória; escalar para várias instâncias exige estado compartilhado para sockets e armazenamento.
+O cadastro cria a conta e inicia a sessão imediatamente, sem enviar código de confirmação. Adicione as configurações SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` e `SMTP_FROM`) no Render para habilitar a recuperação de senha. Como o e-mail não é verificado, use um endereço válido e acessível. Mantenha o serviço Render em uma instância ao usar um único disco persistente e salas Socket.IO em memória; escalar para várias instâncias exige estado compartilhado para sockets e armazenamento.
 
 Sem o disco persistente, o banco SQLite e as imagens de perfil enviadas podem ser perdidos ao reiniciar ou reimplantar. Use a origem exata do site Vercel em `APP_BASE_URL` e `ALLOWED_ORIGINS`. Se os deploys Preview da Vercel devem acessar o mesmo backend, adicione cada origem Preview permitida em `ALLOWED_ORIGINS`.
 

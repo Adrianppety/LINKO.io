@@ -10,7 +10,6 @@ const { readScreenshot } = require('./settingsStore');
 const scrypt = promisify(crypto.scrypt);
 const SESSION_COOKIE = 'linko_session';
 const PASSWORD_PARAMS = { N: 1 << 15, r: 8, p: 1, maxmem: 128 * 1024 * 1024 };
-const CHALLENGE_PARAMS = { N: 1 << 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const DEFAULT_PREFERENCES = Object.freeze({
   theme: 'elegant-light', microphoneId: '', cameraId: '', speakerId: '',
   screenWidth: 2160, frameRate: 144, captureSystemAudio: true, showCursor: true,
@@ -222,83 +221,27 @@ function createAuthRouter(auth, { io } = {}) {
     if (!auth.consumeLimit('register', address, 5, 60 * 60 * 1000) || !auth.consumeLimit('register-email', email, 3, 60 * 60 * 1000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Muitas tentativas. Tente novamente mais tarde.' } });
     }
-    if (!auth.mailer) return res.status(503).json({ error: { code: 'email_unconfigured', message: 'Cadastro indisponível: o envio SMTP ainda não foi configurado.' } });
     const existingEmail = db.prepare('SELECT 1 FROM users WHERE email_normalized=?').get(email);
     const existingNickname = db.prepare('SELECT 1 FROM users WHERE nickname=? COLLATE NOCASE').get(nickname);
     if (existingEmail || existingNickname) return res.status(409).json({ error: { code: 'registration_unavailable', message: 'Não foi possível usar esses dados. Verifique o e-mail/nickname ou entre na conta existente.' } });
     const passwordHash = await hashSecret(password);
-    const code = String(crypto.randomInt(0, 100000000)).padStart(8, '0');
-    const codeSalt = crypto.randomBytes(16).toString('hex');
-    const codeHash = (await scrypt(code, Buffer.from(codeSalt, 'hex'), 32, CHALLENGE_PARAMS)).toString('hex');
-    const pendingId = crypto.randomUUID();
-    const now = new Date().toISOString();
-    db.prepare('DELETE FROM pending_signups WHERE expires_at <= ?').run(now);
-    try {
-      db.prepare(`INSERT INTO pending_signups (id,display_name,nickname,email_normalized,password_hash,code_hash,code_salt,expires_at,attempts,resend_after,created_at)
-        VALUES (?,?,?,?,?,?,?,?,0,?,?)`).run(pendingId, displayName, nickname, email, passwordHash, codeHash, codeSalt,
-        dateAfter(15 * 60 * 1000), dateAfter(60 * 1000), now);
-    } catch {
-      return res.status(409).json({ error: { code: 'registration_unavailable', message: 'Não foi possível usar esses dados. Verifique o e-mail/nickname ou entre na conta existente.' } });
-    }
-    try {
-      await auth.mailer.sendVerification(email, code);
-      return res.status(202).json({ status: 'verification_required', message: 'Se os dados estiverem disponíveis, enviaremos um código de confirmação.' });
-    } catch {
-      db.prepare('DELETE FROM pending_signups WHERE id=?').run(pendingId);
-      return res.status(503).json({ error: { code: 'email_delivery_failed', message: 'Não foi possível enviar o e-mail de confirmação. Nenhuma conta foi ativada.' } });
-    }
-  });
-
-  router.post('/auth/verify-email', async (req, res) => {
-    let email;
-    try { email = normalizeEmail(req.body?.email); } catch (error) { return res.status(400).json({ error: { code: error.code, message: error.message } }); }
-    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
-    if (!/^\d{8}$/.test(code)) return res.status(400).json({ error: { code: 'invalid_code', message: 'O código informado é inválido ou expirou.' } });
-    if (!auth.consumeLimit('verify', `${req.socket.remoteAddress}:${email}`, 10, 15 * 60 * 1000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Muitas tentativas. Solicite um novo código mais tarde.' } });
-    const pending = db.prepare('SELECT * FROM pending_signups WHERE email_normalized=?').get(email);
-    if (!pending || pending.attempts >= 5 || Date.parse(pending.expires_at) <= Date.now()) {
-      if (pending) db.prepare('DELETE FROM pending_signups WHERE id=?').run(pending.id);
-      return res.status(400).json({ error: { code: 'invalid_code', message: 'O código informado é inválido ou expirou.' } });
-    }
-    const supplied = await scrypt(code, Buffer.from(pending.code_salt, 'hex'), 32, CHALLENGE_PARAMS);
-    if (!crypto.timingSafeEqual(supplied, Buffer.from(pending.code_hash, 'hex'))) {
-      db.prepare('UPDATE pending_signups SET attempts=attempts+1 WHERE id=?').run(pending.id);
-      return res.status(400).json({ error: { code: 'invalid_code', message: 'O código informado é inválido ou expirou.' } });
-    }
     const id = crypto.randomUUID();
-    const verifiedAt = new Date().toISOString();
+    const now = new Date().toISOString();
     try {
       db.exec('BEGIN IMMEDIATE');
-      db.prepare(`INSERT INTO users (id,display_name,nickname,email_normalized,password_hash,email_verified_at,status,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'active',?,?)`).run(id,pending.display_name,pending.nickname,pending.email_normalized,pending.password_hash,verifiedAt,verifiedAt,verifiedAt);
-      db.prepare('INSERT INTO user_profiles (user_id,updated_at) VALUES (?,?)').run(id,verifiedAt);
-      db.prepare('INSERT INTO user_preferences (user_id,preferences_json,updated_at) VALUES (?,?,?)').run(id,JSON.stringify(DEFAULT_PREFERENCES),verifiedAt);
-      db.prepare('DELETE FROM pending_signups WHERE id=?').run(pending.id);
+      db.prepare(`INSERT INTO users (id,display_name,nickname,email_normalized,password_hash,email_registered_at,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,'active',?,?)`).run(id,displayName,nickname,email,passwordHash,now,now,now);
+      db.prepare('INSERT INTO user_profiles (user_id,updated_at) VALUES (?,?)').run(id,now);
+      db.prepare('INSERT INTO user_preferences (user_id,preferences_json,updated_at) VALUES (?,?,?)').run(id,JSON.stringify(DEFAULT_PREFERENCES),now);
       db.exec('COMMIT');
-    } catch {
+    } catch (error) {
       db.exec('ROLLBACK');
-      return res.status(409).json({ error: { code: 'registration_conflict', message: 'Não foi possível ativar esta conta. Tente entrar ou iniciar outro cadastro.' } });
+      if (error.errcode !== 2067 && error.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw error;
+      return res.status(409).json({ error: { code: 'registration_unavailable', message: 'Não foi possível usar esses dados. Verifique o e-mail/nickname ou entre na conta existente.' } });
     }
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     auth.issueSession(user, req, res, true);
     return res.status(201).json({ user: publicUser(user) });
-  });
-
-  router.post('/auth/resend-code', async (req, res) => {
-    let email;
-    try { email = normalizeEmail(req.body?.email); } catch { return res.status(202).json({ status: 'accepted', message: 'Se o cadastro estiver pendente, um código será enviado.' }); }
-    if (!auth.mailer) return res.status(503).json({ error: { code: 'email_unconfigured', message: 'O envio de e-mail ainda não está configurado.' } });
-    if (!auth.consumeLimit('resend', `${req.socket.remoteAddress}:${email}`, 5, 60 * 60 * 1000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Muitos reenvios. Tente novamente mais tarde.' } });
-    const pending = db.prepare('SELECT * FROM pending_signups WHERE email_normalized=?').get(email);
-    if (!pending) return res.status(202).json({ status: 'accepted', message: 'Se o cadastro estiver pendente, um código será enviado.' });
-    if (Date.parse(pending.resend_after) > Date.now()) return res.status(429).json({ error: { code: 'resend_wait', message: 'Aguarde antes de solicitar outro código.' } });
-    const code = String(crypto.randomInt(0, 100000000)).padStart(8, '0');
-    const codeSalt = crypto.randomBytes(16).toString('hex');
-    const codeHash = (await scrypt(code, Buffer.from(codeSalt, 'hex'), 32, CHALLENGE_PARAMS)).toString('hex');
-    try { await auth.mailer.sendVerification(email, code); } catch { return res.status(503).json({ error: { code: 'email_delivery_failed', message: 'Não foi possível enviar o código agora.' } }); }
-    db.prepare('UPDATE pending_signups SET code_hash=?,code_salt=?,expires_at=?,attempts=0,resend_after=? WHERE id=?')
-      .run(codeHash,codeSalt,dateAfter(15 * 60 * 1000),dateAfter(60 * 1000),pending.id);
-    return res.status(202).json({ status: 'accepted', message: 'Se o cadastro estiver pendente, um código será enviado.' });
   });
 
   router.post('/auth/login', async (req, res) => {

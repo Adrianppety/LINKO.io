@@ -45,7 +45,7 @@ test('migration is recorded once and preserves reports on database reopen', t =>
   first.createReport(report);
   first.close();
   const second = new SettingsStore(databasePath);
-  assert.equal(second.database.prepare('SELECT count(*) AS total FROM schema_migrations').get().total, 2);
+  assert.equal(second.database.prepare('SELECT count(*) AS total FROM schema_migrations').get().total, 3);
   assert.equal(second.database.prepare('SELECT id FROM bug_reports').get().id, report.id);
   second.close();
 });
