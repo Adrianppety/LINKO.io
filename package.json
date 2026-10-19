@@ -1,0 +1,12 @@
+{
+  "name": "linko-io",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm run build --prefix client && echo \"Client build complete\"",
+    "dev": "concurrently \"npm run dev --prefix client\" \"npm run start --prefix server\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

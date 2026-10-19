@@ -8,139 +8,181 @@ const { AuthService, createAuthRouter } = require('./auth');
 const { createEmailService } = require('./emailService');
 
 const app = express();
-const server = http.createServer(app);
+
+// Only create HTTP server and Socket.io if not in Vercel (serverless environment)
+const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
+let server;
+let io;
+
+if (!isVercel) {
+  server = http.createServer(app);
+  io = socketIo(server, {
+    cors: {
+      origin: [], // Will be set after authService is initialized
+      credentials: true,
+      methods: ['GET', 'POST']
+    }
+  });
+}
+
 const databasePath = process.env.LINKO_DATABASE_PATH ? path.resolve(__dirname, process.env.LINKO_DATABASE_PATH) : path.join(__dirname, 'data', 'linko.sqlite');
 const filesDirectory = process.env.LINKO_FILES_PATH ? path.resolve(__dirname, process.env.LINKO_FILES_PATH) : path.join(__dirname, 'data', 'files');
 const settingsStore = new SettingsStore(databasePath);
 const authService = new AuthService({ store: settingsStore, mailer: createEmailService(), filesDirectory });
-const io = socketIo(server, { cors: { origin: [...authService.allowedOrigins], credentials: true, methods: ['GET', 'POST'] } });
-const allowedOrigins = authService.allowedOrigins;
+
+// Update Socket.io CORS origins after authService is initialized
+if (!isVercel && io) {
+  io.engine.generateId = (req) => {
+    return authService.getSocketUser(req.headers.cookie) ? authService.getSocketUser(req.headers.cookie).id : req.id || '';
+  };
+
+  // Set CORS origins from authService
+  io.of("/").adapter.on("create-room", (room) => {
+    // Room creation logic if needed
+  });
+
+  // Update CORS dynamically
+  io._cors = {
+    origin: [...authService.allowedOrigins],
+    credentials: true,
+    methods: ['GET', 'POST']
+  };
+}
+
+// Middleware - only apply static serving in non-Vercel environments to avoid conflict with Vercel static build
+if (!isVercel) {
+  app.use(express.static(path.join(__dirname, '../client/public')));
+  app.use(express.static(path.join(__dirname, '../client')));
+}
+
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '../client/public')));
-app.use(express.static(path.join(__dirname, '../client')));
 app.use('/api', createAuthRouter(authService, { io }));
 app.use('/api/reports', createReportsRouter(settingsStore, {}, authService));
 
-const PORT = process.env.PORT || 3000;
-
-// Store active rooms and users
-const rooms = new Map();
-
-io.use((socket, next) => {
-  const user = authService.getSocketUser(socket.handshake.headers.cookie);
-  if (!user) return next(new Error('session_required'));
-  socket.data.user = { id: user.id, nickname: user.nickname, displayName: user.display_name };
-  return next();
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+// Socket.io connection handling (only in non-Vercel environments)
+if (!isVercel && io) {
+  // Store active rooms and users
+  const rooms = new Map();
 
-  socket.join(`user:${socket.data.user.id}`);
-  socket.on('leave-room', (conversationId) => {
-    if (typeof conversationId !== 'string' || !socket.rooms.has(conversationId)) return;
-    socket.leave(conversationId);
-    const roomUsers = rooms.get(conversationId);
-    roomUsers?.delete(socket.id);
-    socket.to(conversationId).emit('user-disconnected', socket.id);
-    if (roomUsers?.size === 0) rooms.delete(conversationId);
+  io.use((socket, next) => {
+    const user = authService.getSocketUser(socket.handshake.headers.cookie);
+    if (!user) return next(new Error('session_required'));
+    socket.data.user = { id: user.id, nickname: user.nickname, displayName: user.display_name };
+    return next();
   });
 
-  socket.on('join-room', (conversationId) => {
-    if (typeof conversationId !== 'string' || !authService.isConversationMember(conversationId, socket.data.user.id)) {
-      socket.emit('room-error', { code: 'conversation_forbidden' });
-      return;
-    }
-    socket.join(conversationId);
+  io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
 
-    if (!rooms.has(conversationId)) {
-      rooms.set(conversationId, new Set());
-    }
+    socket.join(`user:${socket.data.user.id}`);
+    socket.on('leave-room', (conversationId) => {
+      if (typeof conversationId !== 'string' || !socket.rooms.has(conversationId)) return;
+      socket.leave(conversationId);
+      const roomUsers = rooms.get(conversationId);
+      roomUsers?.delete(socket.id);
+      socket.to(conversationId).emit('user-disconnected', socket.id);
+      if (roomUsers?.size === 0) rooms.delete(conversationId);
+    });
 
-    const roomUsers = rooms.get(conversationId);
-    roomUsers.add(socket.id);
+    socket.on('join-room', (conversationId) => {
+      if (typeof conversationId !== 'string' || !authService.isConversationMember(conversationId, socket.data.user.id)) {
+        socket.emit('room-error', { code: 'conversation_forbidden' });
+        return;
+      }
+      socket.join(conversationId);
 
-    socket.to(conversationId).emit('user-connected', socket.data.user.nickname, socket.id);
+      if (!rooms.has(conversationId)) {
+        rooms.set(conversationId, new Set());
+      }
 
-    const existingUsers = Array.from(roomUsers).filter(id => id !== socket.id).map(id => {
-      const peer = io.sockets.sockets.get(id);
-      return peer ? { id: peer.data.user.id, nickname: peer.data.user.nickname, socketId: id } : null;
-    }).filter(Boolean);
-    socket.emit('room-users', existingUsers);
+      const roomUsers = rooms.get(conversationId);
+      roomUsers.add(socket.id);
 
-    console.log(`User ${socket.data.user.nickname} joined conversation ${conversationId}`);
-  });
+      socket.to(conversationId).emit('user-connected', socket.data.user.nickname, socket.id);
 
-  socket.on('offer', (conversationId, offer) => {
-    if (!socket.rooms.has(conversationId)) return;
-    socket.to(conversationId).emit('offer', offer, socket.id, socket.id);
-  });
+      const existingUsers = Array.from(roomUsers).filter(id => id !== socket.id).map(id => {
+        const peer = io.sockets.sockets.get(id);
+        return peer ? { id: peer.data.user.id, nickname: peer.data.user.nickname, socketId: id } : null;
+      }).filter(Boolean);
+      socket.emit('room-users', existingUsers);
 
-  socket.on('answer', (conversationId, answer, _clientSender, targetSocketId) => {
-    if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
-    io.to(targetSocketId).emit('answer', answer, socket.id, socket.id);
-  });
+      console.log(`User ${socket.data.user.nickname} joined conversation ${conversationId}`);
+    });
 
-  socket.on('ice-candidate', (conversationId, candidate, _clientSender, targetSocketId) => {
-    if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
-    io.to(targetSocketId).emit('ice-candidate', candidate, socket.id, socket.id);
-  });
+    socket.on('offer', (conversationId, offer) => {
+      if (!socket.rooms.has(conversationId)) return;
+      socket.to(conversationId).emit('offer', offer, socket.id, socket.id);
+    });
 
-  socket.on('input-event', (conversationId, eventData) => {
-    if (!socket.rooms.has(conversationId) || !eventData || typeof eventData !== 'object') return;
-    socket.to(conversationId).emit('input-event', eventData, socket.data.user.nickname);
-  });
+    socket.on('answer', (conversationId, answer, _clientSender, targetSocketId) => {
+      if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
+      io.to(targetSocketId).emit('answer', answer, socket.id, socket.id);
+    });
 
-  // Handle user leaving
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    socket.on('ice-candidate', (conversationId, candidate, _clientSender, targetSocketId) => {
+      if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
+      io.to(targetSocketId).emit('ice-candidate', candidate, socket.id, socket.id);
+    });
 
-    // Remove user from all rooms
-    rooms.forEach((userSet, roomId) => {
-      if (userSet.has(socket.id)) {
-        userSet.delete(socket.id);
-        // Notify others in the room
-        socket.to(roomId).emit('user-disconnected', socket.id);
+    socket.on('input-event', (conversationId, eventData) => {
+      if (!socket.rooms.has(conversationId) || !eventData || typeof eventData !== 'object') return;
+      socket.to(conversationId).emit('input-event', eventData, socket.data.user.nickname);
+    });
 
-        // Clean up empty rooms
-        if (userSet.size === 0) {
-          rooms.delete(roomId);
+    // Handle user leaving
+    socket.on('disconnect', () => {
+      console.log('User disconnected:', socket.id);
+
+      // Remove user from all rooms
+      rooms.forEach((userSet, roomId) => {
+        if (userSet.has(socket.id)) {
+          userSet.delete(socket.id);
+          // Notify others in the room
+          socket.to(roomId).emit('user-disconnected', socket.id);
+
+          // Clean up empty rooms
+          if (userSet.size === 0) {
+            rooms.delete(roomId);
+          }
         }
+      });
+    });
+
+    socket.on('chat-message', (conversationId, message) => {
+      if (!socket.rooms.has(conversationId) || typeof message !== 'string') return;
+      const content = message.trim();
+      if (!content || content.length > 5000) return;
+      const id = require('node:crypto').randomUUID();
+      const createdAt = new Date().toISOString();
+      try {
+        authService.db.prepare('INSERT INTO messages (id,conversation_id,sender_user_id,content,created_at) VALUES (?,?,?,?,?)')
+          .run(id,conversationId,socket.data.user.id,content,createdAt);
+        io.to(conversationId).emit('chat-message', content, socket.data.user.nickname, { id, createdAt });
+      } catch (error) {
+        console.error('Message persistence failed:', error.message);
+        socket.emit('message-error', { code: 'message_unavailable' });
       }
     });
   });
+}
 
-  socket.on('chat-message', (conversationId, message) => {
-    if (!socket.rooms.has(conversationId) || typeof message !== 'string') return;
-    const content = message.trim();
-    if (!content || content.length > 5000) return;
-    const id = require('node:crypto').randomUUID();
-    const createdAt = new Date().toISOString();
-    try {
-      authService.db.prepare('INSERT INTO messages (id,conversation_id,sender_user_id,content,created_at) VALUES (?,?,?,?,?)')
-        .run(id,conversationId,socket.data.user.id,content,createdAt);
-      io.to(conversationId).emit('chat-message', content, socket.data.user.nickname, { id, createdAt });
-    } catch (error) {
-      console.error('Message persistence failed:', error.message);
-      socket.emit('message-error', { code: 'message_unavailable' });
-    }
+// Start server only in non-Vercel environments
+if (!isVercel && server) {
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`Signaling server running on port ${PORT}`);
   });
-});
+}
 
-app.use((error, req, res, next) => {
-  if (res.headersSent) return next(error);
-  if (error.type === 'entity.too.large') {
-    return res.status(413).json({ error: { code: 'payload_too_large', message: 'O envio excede o limite permitido.' } });
-  }
-  if (error instanceof SyntaxError && Object.hasOwn(error, 'body')) {
-    return res.status(400).json({ error: { code: 'invalid_json', message: 'O corpo da requisição não é um JSON válido.' } });
-  }
-  console.error('HTTP request failed:', error.message);
-  return res.status(500).json({ error: { code: 'internal_error', message: 'Não foi possível concluir a solicitação.' } });
-});
+// Export app for Vercel serverless functions
+module.exports = app;
 
-server.listen(PORT, () => {
-  console.log(`Signaling server running on port ${PORT}`);
-});
-
-module.exports = { io, authService, settingsStore };
+// For backward compatibility, also export io and authService if needed
+module.exports.io = io;
+module.exports.authService = authService;
+module.exports.settingsStore = settingsStore;
