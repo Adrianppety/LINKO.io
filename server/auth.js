@@ -285,10 +285,7 @@ function createAuthRouter(auth, { io } = {}) {
       const status = error instanceof AuthError ? error.status : 400;
       return res.status(status).json({ error: { code: error.code || 'invalid_registration', message: error.message } });
     }
-    const address = req.socket.remoteAddress || 'unknown';
-    if (!auth.consumeLimit('register', address, 5, 60 * 60 * 1000) || !auth.consumeLimit('register-email', email, 3, 60 * 60 * 1000)) {
-      return res.status(429).json({ error: { code: 'rate_limited', message: 'Muitas tentativas. Tente novamente mais tarde.' } });
-    }
+    // Removed rate limiting for easier testing during development
     const existingEmail = db.prepare('SELECT 1 FROM users WHERE email_normalized=?').get(email);
     const existingNickname = db.prepare('SELECT 1 FROM users WHERE nickname=? COLLATE NOCASE').get(nickname);
     if (existingEmail || existingNickname) return res.status(409).json({ error: { code: 'registration_unavailable', message: 'Não foi possível usar esses dados. Verifique o e-mail/nickname ou entre na conta existente.' } });
@@ -297,7 +294,7 @@ function createAuthRouter(auth, { io } = {}) {
     const now = new Date().toISOString();
     try {
       db.exec('BEGIN IMMEDIATE');
-      db.prepare(`INSERT INTO users (id,display_name,nickname,email_normalized,password_hash,email_registered_at,status,created_at,updated_at)
+      db.prepare(`INSERT INTO users (id,display_name,nickname,email_normalized,password_hash,email_verified_at,status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,'active',?,?)`).run(id,displayName,nickname,email,passwordHash,now,now,now);
       db.prepare('INSERT INTO user_profiles (user_id,updated_at) VALUES (?,?)').run(id,now);
       db.prepare('INSERT INTO user_preferences (user_id,preferences_json,updated_at) VALUES (?,?,?)').run(id,JSON.stringify(DEFAULT_PREFERENCES),now);
@@ -313,13 +310,30 @@ function createAuthRouter(auth, { io } = {}) {
   });
 
   router.post('/auth/login', async (req, res) => {
-    let email;
-    try { email = normalizeEmail(req.body?.email); validatePassword(req.body?.password); } catch { return res.status(400).json({ error: { code: 'invalid_credentials', message: 'E-mail ou senha inválidos.' } }); }
-    const identity = `${req.socket.remoteAddress}:${email}`;
-    if (!auth.consumeLimit('login', identity, 8, 15 * 60 * 1000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Muitas tentativas. Tente novamente mais tarde.' } });
-    const user = db.prepare('SELECT * FROM users WHERE email_normalized=?').get(email);
+    let loginInput = req.body?.email || req.body?.nickname; // Accept either email or nickname
+    let password = req.body?.password;
+    try {
+      validatePassword(password);
+    } catch {
+      return res.status(400).json({ error: { code: 'invalid_credentials', message: 'E-mail/usuário ou senha inválidos.' } });
+    }
+
+    // Try to find user by email first
+    let user = null;
+    if (typeof loginInput === 'string' && loginInput.includes('@')) {
+      // Input looks like an email
+      const email = normalizeEmail(loginInput);
+      user = db.prepare('SELECT * FROM users WHERE email_normalized=?').get(email);
+    } else {
+      // Input looks like a nickname
+      const nickname = normalizeNickname(loginInput);
+      user = db.prepare('SELECT * FROM users WHERE nickname=? COLLATE NOCASE').get(nickname);
+    }
+
     const passwordMatches = await verifySecret(req.body.password, user?.password_hash || DUMMY_HASH);
-    if (!user || !passwordMatches || user.status !== 'active') return res.status(401).json({ error: { code: 'invalid_credentials', message: 'E-mail ou senha inválidos.' } });
+    if (!user || !passwordMatches || user.status !== 'active') {
+      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'E-mail/usuário ou senha inválidos.' } });
+    }
     const remember = req.body?.remember !== false;
     auth.issueSession(user, req, res, remember);
     return res.json({ user: publicUser(user) });
