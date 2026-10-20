@@ -84,6 +84,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .button { border: 0; border-radius: 9px; padding: 0 17px; min-height: 44px; font-size: 12px; font-weight: 800; transition: transform .15s ease, filter .15s ease; white-space: nowrap; }
 .button:hover:not(:disabled) { filter: brightness(.97); transform: translateY(-1px); }
 .button:disabled { cursor: wait; opacity: .6; }
+.bug-report { display: inline-flex; min-height: 34px; align-items: center; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--soft); font-size: 11px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.bug-report:hover { border-color: var(--accent); }
+.bug-report:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .primary { color: #082a14; background: var(--accent); }
 .join-form .primary { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; min-height: 50px; padding: 0 18px; }
 .join-form .primary span { font-size: 18px; }
@@ -95,8 +98,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .room-title h1 { margin: 6px 0 0; font-size: 20px; letter-spacing: -.04em; }
 .room-code { display: inline-block; margin-left: 5px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent-dark); background: var(--soft); font: 700 12px "DM Mono", monospace; letter-spacing: .04em; vertical-align: 2px; }
 .room-actions, .share-link { display: flex; align-items: center; gap: 9px; }
-.share-link { width: min(440px, 48vw); }
-.share-link input { height: 42px; font: 11px "DM Mono", monospace; }
+.share-link { width: auto; }
 .room-actions .button { min-height: 42px; }
 .leave { color: var(--danger); background: var(--danger-bg); }
 .room-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(380px, 1fr); gap: 18px; align-items: start; }
@@ -106,8 +108,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .stage-heading h2 span { margin-left: 5px; color: var(--muted); font: 11px "DM Mono", monospace; }
 .stage-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .connection-dot.online { background: var(--accent); box-shadow: 0 0 0 5px #22c55e1a; }
-.video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; min-height: 210px; margin: 16px 0; }
-.video-tile { position: relative; overflow: hidden; min-height: 190px; aspect-ratio: 16 / 10; border-radius: 12px; background: #191b19; }
+.video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); align-content: start; gap: 9px; min-height: 210px; margin: 16px 0; }
+.video-tile { position: relative; overflow: hidden; min-width: 0; min-height: 150px; aspect-ratio: 16 / 10; border-radius: 12px; background: #191b19; }
 .video-tile.featured { grid-column: 1 / -1; order: -1; min-height: 280px; max-height: 70vh; aspect-ratio: 16 / 9; }
 .video-tile video { position: absolute; width: 100%; height: 100%; inset: 0; object-fit: contain; }
 .video-tile:fullscreen { display: grid; width: 100vw; height: 100vh; min-height: 0; max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
@@ -163,7 +165,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .home h1 { font-size: 48px; }
   .room-header { align-items: flex-start; flex-direction: column; padding: 17px; }
   .room-actions, .share-link { width: 100%; }
-  .share-link input { flex: 1; }
   .stage, .youtube { padding: 15px; }
   .video-grid { grid-template-columns: 1fr; }
   .video-tile { min-height: 205px; }

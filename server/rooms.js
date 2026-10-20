@@ -1,6 +1,7 @@
-const { randomBytes } = require('node:crypto');
+const { randomInt } = require('node:crypto');
 
-const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/;
+const ROOM_ID_PATTERN = /^[A-Z]{4}$/;
+const ROOM_CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 function normalizeNickname(value) {
   if (typeof value !== 'string') return null;
@@ -13,7 +14,10 @@ class RoomRegistry {
     this.maxParticipants = maxParticipants;
     this.roomTtlMs = roomTtlMs;
     this.now = now;
-    this.createId = createId || (() => randomBytes(12).toString('base64url'));
+    this.createId = createId || (() => Array.from(
+      { length: 4 },
+      () => ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)]
+    ).join(''));
     this.rooms = new Map();
     this.participantRooms = new Map();
   }
@@ -30,9 +34,11 @@ class RoomRegistry {
   }
 
   join(roomId, socketId, nickname) {
-    if (typeof roomId !== 'string' || !ROOM_ID_PATTERN.test(roomId)) {
+    if (typeof roomId !== 'string') {
       return { ok: false, message: 'O link da sala é inválido.' };
     }
+    roomId = roomId.toUpperCase();
+    if (!ROOM_ID_PATTERN.test(roomId)) return { ok: false, message: 'O link da sala é inválido.' };
     this.prune();
     const room = this.rooms.get(roomId);
     if (!room) return { ok: false, message: 'Sala não encontrada ou encerrada.' };

@@ -1,0 +1,31 @@
+name: Relatar bug
+description: Informe um problema encontrado no LINKO.IO
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Obrigado por ajudar a melhorar o LINKO.IO! Descreva o problema com o máximo de detalhes que puder."
+  - type: textarea
+    id: problem
+    attributes:
+      label: O que aconteceu?
+      description: Conte o que você fez e o que ocorreu.
+      placeholder: Ao tentar...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que você esperava que acontecesse?
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Navegador e dispositivo
+      placeholder: "Ex.: Chrome no Windows 11"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Informações adicionais
+      description: Se ajudar, inclua etapas para reproduzir ou uma captura de tela.

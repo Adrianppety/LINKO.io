@@ -38,6 +38,7 @@ document.querySelector('#app').innerHTML = `
       <a class="brand" href="/" aria-label="Linko início"><img src="/linko-wordmark.png" alt="Linko" /></a>
       <div class="topbar-tools">
         <span class="topbar-note"><i></i> Salas temporárias, sem cadastro</span>
+        <a class="bug-report" href="https://github.com/Adrianppety/LINKO.io/issues/new?template=bug_report.yml" target="_blank" rel="noopener noreferrer">Relatar bug</a>
         <label class="theme-picker" for="theme-select"><span>Tema</span><select id="theme-select" aria-label="Tema visual"><option value="elegant-light">Claro</option><option value="elegant-dark">Escuro</option><option value="gamer">Gamer</option></select></label>
       </div>
     </header>
@@ -62,7 +63,7 @@ document.querySelector('#app').innerHTML = `
           <h1 id="room-name">Sua sala</h1>
         </div>
         <div class="room-actions">
-          <div class="share-link"><input id="room-link" aria-label="Link da sala" readonly /><button class="button secondary" id="copy-link">Copiar link</button></div>
+          <div class="share-link"><button class="button secondary" id="copy-link">Copiar link da sala</button></div>
           <button class="button leave" id="leave-room">Sair</button>
         </div>
       </header>
@@ -179,7 +180,6 @@ async function activateRoom(data) {
   home.classList.add('hidden');
   room.classList.remove('hidden');
   $('#room-name').innerHTML = `Sala <span class="room-code">${formatRoomCode(data.roomId)}</span>`;
-  $('#room-link').value = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(data.roomId)}`;
   $('#local-name').textContent = `${app.nickname} (você)`;
   $('#local-video').srcObject = app.localStream;
   app.participants = new Map([[socket.id, app.nickname], ...(data.participants || []).map((participant) => [participant.socketId, participant.nickname])]);
@@ -369,7 +369,7 @@ function escapeHtml(value) {
 }
 
 function formatRoomCode(roomId) {
-  return roomId.match(/.{1,4}/g).join(' · ').toUpperCase();
+  return roomId.toUpperCase();
 }
 
 function createPeer(socketId, initiator) {
@@ -630,13 +630,25 @@ async function rejoinRoom() {
 }
 
 $('#copy-link').addEventListener('click', async () => {
+  const roomLink = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(app.roomId)}`;
   try {
-    await navigator.clipboard.writeText($('#room-link').value);
+    await navigator.clipboard.writeText(roomLink);
     showToast('Link copiado. Convide até 9 pessoas.');
   } catch {
-    $('#room-link').select();
-    document.execCommand('copy');
-    showToast('Link copiado.');
+    const input = document.createElement('textarea');
+    input.value = roomLink;
+    input.setAttribute('readonly', '');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.append(input);
+    input.select();
+    const copied = document.execCommand('copy');
+    input.remove();
+    if (!copied) {
+      showToast('Não foi possível copiar o link. Tente novamente.');
+      return;
+    }
+    showToast('Link copiado. Convide até 9 pessoas.');
   }
 });
 
