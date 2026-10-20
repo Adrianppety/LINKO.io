@@ -97,7 +97,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .share-link input { height: 42px; font: 11px "DM Mono", monospace; }
 .room-actions .button { min-height: 42px; }
 .leave { color: var(--danger); background: var(--danger-bg); }
-.room-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(290px, .8fr); gap: 18px; align-items: start; }
+.room-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(380px, 1fr); gap: 18px; align-items: start; }
 .stage, .youtube { padding: 20px; }
 .stage-heading, .youtube-heading { display: flex; align-items: center; justify-content: space-between; }
 .stage-heading h2, .youtube-heading h2 { margin: 0; font-size: 15px; }
@@ -106,10 +106,19 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection-dot.online { background: var(--accent); box-shadow: 0 0 0 5px #22c55e1a; }
 .video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; min-height: 210px; margin: 16px 0; }
 .video-tile { position: relative; overflow: hidden; min-height: 190px; aspect-ratio: 16 / 10; border-radius: 12px; background: #191b19; }
+.video-tile.featured { grid-column: 1 / -1; order: -1; min-height: 280px; max-height: 70vh; aspect-ratio: 16 / 9; }
 .video-tile video { position: absolute; width: 100%; height: 100%; inset: 0; object-fit: contain; }
-.video-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #c2c4bc; font-size: 10px; }
+.video-tile:fullscreen { display: grid; width: 100vw; height: 100vh; min-height: 0; max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
+.video-tile:fullscreen video { object-fit: contain; }
+.video-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #c2c4bc; font-size: 10px; pointer-events: none; }
 .avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #303830; color: #a7e6b6; font-size: 13px; font-weight: 800; }
-.video-name { position: absolute; z-index: 1; left: 10px; bottom: 9px; max-width: calc(100% - 20px); overflow: hidden; padding: 5px 8px; border-radius: 6px; color: white; background: #111b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.video-name { position: absolute; z-index: 1; left: 10px; bottom: 9px; max-width: calc(100% - 20px); overflow: hidden; padding: 5px 8px; border-radius: 6px; color: white; background: #111b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.tile-actions { position: absolute; z-index: 2; top: 10px; right: 10px; display: flex; align-items: center; gap: 6px; }
+.focus-toggle, .fullscreen-toggle { position: relative; z-index: 2; min-height: 32px; border: 1px solid #ffffff4a; border-radius: 8px; color: white; background: #111b; }
+.focus-toggle { padding: 0 11px; font-size: 10px; font-weight: 700; }
+.fullscreen-toggle { display: grid; width: 34px; place-items: center; padding: 0; }
+.fullscreen-toggle svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.video-tile.featured .focus-toggle { border-color: var(--accent); color: #082a14; background: var(--accent); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .control-group { display: flex; gap: 5px; }
 .control { min-height: 38px; padding: 0 11px; font-size: 10px; }
@@ -132,7 +141,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 @media (max-width: 860px) {
   .home { gap: 38px; padding: 52px; }
   .room-layout { grid-template-columns: 1fr; }
-  .youtube { display: grid; grid-template-columns: 1fr 1.2fr; column-gap: 18px; }
+  .youtube { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); column-gap: 18px; }
   .youtube-heading { grid-column: 1 / -1; margin-bottom: 14px; }
   .youtube-form { align-self: center; }
   .player-frame { margin-top: 0; grid-column: 2; grid-row: 2 / span 2; }
@@ -155,6 +164,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .stage, .youtube { padding: 15px; }
   .video-grid { grid-template-columns: 1fr; }
   .video-tile { min-height: 205px; }
+  .video-tile.featured { min-height: 230px; max-height: 60vh; }
   .toolbar { align-items: stretch; flex-direction: column; }
   .control-group .control { flex: 1; }
   .control-group select { width: 44%; }

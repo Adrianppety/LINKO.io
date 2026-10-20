@@ -8,6 +8,7 @@ const app = {
   roomId: null,
   nickname: '',
   localStream: null,
+  featuredSocketId: null,
   peers: new Map(),
   pendingSignals: new Map(),
   participants: new Map(),
@@ -69,6 +70,12 @@ document.querySelector('#app').innerHTML = `
             <article class="video-tile self-tile" id="self-tile">
               <video id="local-video" autoplay playsinline muted></video>
               <div class="video-empty" id="local-empty"><span class="avatar">Eu</span><span>Sua câmera está desligada</span></div>
+              <div class="tile-actions">
+                <button class="focus-toggle" type="button" aria-label="Destacar sua tela" aria-pressed="false">Destacar</button>
+                <button class="fullscreen-toggle" type="button" aria-label="Tela cheia sua tela" title="Tela cheia">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>
+                </button>
+              </div>
               <span class="video-name" id="local-name"></span>
             </article>
           </div>
@@ -240,14 +247,86 @@ function renderParticipants() {
     const empty = document.createElement('div');
     empty.className = 'video-empty';
     empty.innerHTML = `<span class="avatar">${escapeHtml(nickname.slice(0, 2).toUpperCase())}</span><span>Aguardando mídia…</span>`;
+    const focusToggle = document.createElement('button');
+    focusToggle.className = 'focus-toggle';
+    focusToggle.type = 'button';
+    focusToggle.textContent = 'Destacar';
+    focusToggle.setAttribute('aria-label', `Destacar ${nickname}`);
+    focusToggle.setAttribute('aria-pressed', 'false');
+    const fullscreenToggle = document.createElement('button');
+    fullscreenToggle.className = 'fullscreen-toggle';
+    fullscreenToggle.type = 'button';
+    fullscreenToggle.setAttribute('aria-label', `Tela cheia ${nickname}`);
+    fullscreenToggle.title = 'Tela cheia';
+    fullscreenToggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>';
     const name = document.createElement('span');
     name.className = 'video-name';
     name.textContent = nickname;
-    tile.append(video, audio, empty, name);
+    const tileActions = document.createElement('div');
+    tileActions.className = 'tile-actions';
+    tileActions.append(focusToggle, fullscreenToggle);
+    tile.append(video, audio, empty, tileActions, name);
     grid.append(tile);
   }
+  updateFeaturedTiles();
   $('#participant-count').textContent = `${app.participants.size}/10`;
   $('#local-empty').classList.toggle('hidden', hasActiveLocalVideo());
+}
+
+$('#video-grid').addEventListener('click', (event) => {
+  const fullscreenButton = event.target.closest('.fullscreen-toggle');
+  if (fullscreenButton) {
+    toggleTileFullscreen(fullscreenButton.closest('.video-tile'));
+    return;
+  }
+  const button = event.target.closest('.focus-toggle');
+  if (!button) return;
+  const tile = button.closest('.video-tile');
+  const socketId = tile.id === 'self-tile' ? 'self' : tile.dataset.socketId;
+  setFeaturedTile(app.featuredSocketId === socketId ? null : socketId);
+});
+
+$('#video-grid').addEventListener('dblclick', (event) => {
+  if (event.target.closest('button')) return;
+  const tile = event.target.closest('.video-tile');
+  if (tile) toggleTileFullscreen(tile);
+});
+
+async function toggleTileFullscreen(tile) {
+  try {
+    if (document.fullscreenElement === tile) await document.exitFullscreen();
+    else if (tile.requestFullscreen) await tile.requestFullscreen();
+    else throw new Error('Este navegador não oferece tela cheia para este vídeo.');
+  } catch (error) {
+    showToast(error.message || 'Não foi possível abrir a tela cheia.');
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  for (const tile of $('#video-grid').querySelectorAll('.video-tile')) {
+    const button = tile.querySelector('.fullscreen-toggle');
+    const isFullscreen = document.fullscreenElement === tile;
+    const participant = tile.querySelector('.video-name')?.textContent || 'esta tela';
+    button.setAttribute('aria-label', `${isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'} ${participant}`);
+    button.title = isFullscreen ? 'Sair da tela cheia' : 'Tela cheia';
+  }
+});
+
+function setFeaturedTile(socketId) {
+  app.featuredSocketId = socketId;
+  updateFeaturedTiles();
+}
+
+function updateFeaturedTiles() {
+  for (const tile of $('#video-grid').querySelectorAll('.video-tile')) {
+    const socketId = tile.id === 'self-tile' ? 'self' : tile.dataset.socketId;
+    const isFeatured = socketId === app.featuredSocketId;
+    tile.classList.toggle('featured', isFeatured);
+    const button = tile.querySelector('.focus-toggle');
+    button.setAttribute('aria-pressed', String(isFeatured));
+    button.textContent = isFeatured ? 'Remover destaque' : 'Destacar';
+    button.setAttribute('aria-label', isFeatured ? `Remover destaque de ${tile.querySelector('.video-name')?.textContent || 'sua tela'}` : `Destacar ${tile.querySelector('.video-name')?.textContent || 'sua tela'}`);
+  }
 }
 
 function escapeHtml(value) {
@@ -360,6 +439,7 @@ function removePeer(socketId) {
   app.pendingSignals.delete(socketId);
   if (peer && !peer.destroyed) peer.destroy();
   app.participants.delete(socketId);
+  if (app.featuredSocketId === socketId) setFeaturedTile(null);
   app.remoteStreams.delete(socketId);
   app.remoteAudioStreams.delete(socketId);
   $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`)?.remove();
@@ -413,6 +493,7 @@ function leaveRoom(notifyServer) {
   for (const track of app.localStream?.getTracks() || []) track.stop();
   app.localStream = null;
   app.roomId = null;
+  app.featuredSocketId = null;
   app.participants.clear();
   app.youtubePlayer?.stopVideo();
   room.classList.add('hidden');
