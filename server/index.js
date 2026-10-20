@@ -5,6 +5,7 @@ const path = require('node:path');
 const { Server } = require('socket.io');
 const { RoomRegistry, normalizeNickname } = require('./rooms');
 const { getAllowedOrigins } = require('./cors');
+const { isValidSignal } = require('./signalValidation');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
@@ -136,16 +137,6 @@ function validateYoutubeControl(payload) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isValidSignal(signal) {
-  if (!signal || typeof signal !== 'object' || Array.isArray(signal)) return false;
-  if (signal.type && !['offer', 'answer', 'candidate', 'renegotiate'].includes(signal.type)) return false;
-  try {
-    return Buffer.byteLength(JSON.stringify(signal)) <= 64_000;
-  } catch {
-    return false;
-  }
 }
 
 function reply(acknowledge, response) {

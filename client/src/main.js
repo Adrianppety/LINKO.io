@@ -9,8 +9,10 @@ const app = {
   nickname: '',
   localStream: null,
   peers: new Map(),
+  pendingSignals: new Map(),
   participants: new Map(),
   remoteStreams: new Map(),
+  remoteAudioStreams: new Map(),
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   screenTrack: null,
   screenStream: null,
@@ -196,7 +198,18 @@ socket.on('user-disconnected', ({ socketId }) => {
 });
 socket.on('signal', ({ from, signal }) => {
   const peer = app.peers.get(from);
-  if (peer && signal) peer.signal(signal);
+  if (!app.isInRoom || !from || !signal) return;
+  if (peer) {
+    peer.signal(signal);
+    return;
+  }
+  const pending = app.pendingSignals.get(from) || [];
+  if (pending.length >= 32) {
+    console.warn(`Dropping excess WebRTC signals from ${from}`);
+    return;
+  }
+  pending.push(signal);
+  app.pendingSignals.set(from, pending);
 });
 socket.on('youtube-control', (state) => applyYoutubeState(state));
 
@@ -218,13 +231,19 @@ function renderParticipants() {
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    video.muted = true;
+    video.addEventListener('loadeddata', () => updateRemoteVideoState(tile));
+    video.addEventListener('playing', () => updateRemoteVideoState(tile));
+    const audio = document.createElement('audio');
+    audio.autoplay = true;
+    audio.hidden = true;
     const empty = document.createElement('div');
     empty.className = 'video-empty';
     empty.innerHTML = `<span class="avatar">${escapeHtml(nickname.slice(0, 2).toUpperCase())}</span><span>Aguardando mídia…</span>`;
     const name = document.createElement('span');
     name.className = 'video-name';
     name.textContent = nickname;
-    tile.append(video, empty, name);
+    tile.append(video, audio, empty, name);
     grid.append(tile);
   }
   $('#participant-count').textContent = `${app.participants.size}/10`;
@@ -257,40 +276,92 @@ function createPeer(socketId, initiator) {
   } else if (cameraTrack) {
     peer.addTrack(cameraTrack, app.localStream);
   }
-  peer.on('signal', (signal) => socket.emit('signal', { targetSocketId: socketId, signal }));
-  peer.on('stream', (stream) => {
-    const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
-    if (!tile) return;
-    let combinedStream = app.remoteStreams.get(socketId);
-    if (!combinedStream) {
-      combinedStream = new MediaStream();
-      app.remoteStreams.set(socketId, combinedStream);
-      combinedStream.addEventListener('removetrack', () => {
-        const hasVideo = combinedStream.getVideoTracks().some((track) => track.readyState === 'live');
-        tile.querySelector('.video-empty')?.classList.toggle('hidden', hasVideo);
-      });
-    }
-    for (const track of stream.getTracks()) {
-      if (!combinedStream.getTracks().some((current) => current.id === track.id)) combinedStream.addTrack(track);
-    }
-    tile.querySelector('video').srcObject = combinedStream;
-    const hasVideo = combinedStream.getVideoTracks().some((track) => track.readyState === 'live');
-    tile.querySelector('.video-empty').classList.toggle('hidden', hasVideo);
+  peer.on('signal', (signal) => {
+    socket.timeout(8000).emit('signal', { targetSocketId: socketId, signal }, (error, response) => {
+      if (error || !response?.ok) {
+        console.warn(`WebRTC signaling failed for ${socketId}:`, error?.message || response?.message);
+        if (app.isInRoom && app.peers.get(socketId) === peer) showToast('Não foi possível negociar o vídeo com um participante. Tente compartilhar a tela novamente.');
+      }
+    });
   });
+  peer.on('track', (track) => attachRemoteTrack(socketId, track));
   peer.on('connect', () => setConnection(true, 'Conectado à sala'));
   peer.on('close', () => app.peers.delete(socketId));
   peer.on('error', (error) => {
     console.warn('WebRTC peer error:', error.message);
     setConnection(false, 'Tentando restabelecer mídia…');
   });
+  const pendingSignals = app.pendingSignals.get(socketId) || [];
+  app.pendingSignals.delete(socketId);
+  for (const signal of pendingSignals) peer.signal(signal);
+}
+
+function attachRemoteTrack(socketId, track) {
+  const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
+  if (!tile) return;
+  let combinedStream = app.remoteStreams.get(socketId);
+  if (!combinedStream) {
+    combinedStream = new MediaStream();
+    app.remoteStreams.set(socketId, combinedStream);
+  }
+  if (!combinedStream.getTracks().some((current) => current.id === track.id)) {
+    combinedStream.addTrack(track);
+    if (track.kind === 'audio') {
+      let audioStream = app.remoteAudioStreams.get(socketId);
+      if (!audioStream) {
+        audioStream = new MediaStream();
+        app.remoteAudioStreams.set(socketId, audioStream);
+      }
+      audioStream.addTrack(track);
+      const audio = tile.querySelector('audio');
+      audio.srcObject = audioStream;
+      playRemoteAudio(audio);
+    }
+    track.addEventListener('ended', () => {
+      if (combinedStream.getTracks().some((current) => current.id === track.id)) combinedStream.removeTrack(track);
+      const audioStream = app.remoteAudioStreams.get(socketId);
+      if (audioStream?.getTracks().some((current) => current.id === track.id)) audioStream.removeTrack(track);
+      updateRemoteVideoState(tile);
+    }, { once: true });
+  }
+  const video = tile.querySelector('video');
+  video.srcObject = combinedStream;
+  video.play().catch((error) => console.warn('Remote video playback was blocked:', error.message));
+  updateRemoteVideoState(tile);
+}
+
+function playRemoteAudio(audio) {
+  audio.play().catch((error) => {
+    if (error.name === 'NotAllowedError') {
+      audio.dataset.playBlocked = 'true';
+      return;
+    }
+    console.warn('Remote audio playback failed:', error.message);
+  });
+}
+
+document.addEventListener('pointerdown', () => {
+  for (const audio of document.querySelectorAll('.remote-tile audio[data-play-blocked="true"]')) {
+    delete audio.dataset.playBlocked;
+    playRemoteAudio(audio);
+  }
+});
+
+function updateRemoteVideoState(tile) {
+  const video = tile.querySelector('video');
+  const hasLiveVideoTrack = video?.srcObject?.getVideoTracks().some((track) => track.readyState === 'live');
+  const hasVideo = hasLiveVideoTrack && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0;
+  tile.querySelector('.video-empty')?.classList.toggle('hidden', Boolean(hasVideo));
 }
 
 function removePeer(socketId) {
   const peer = app.peers.get(socketId);
   app.peers.delete(socketId);
+  app.pendingSignals.delete(socketId);
   if (peer && !peer.destroyed) peer.destroy();
   app.participants.delete(socketId);
   app.remoteStreams.delete(socketId);
+  app.remoteAudioStreams.delete(socketId);
   $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`)?.remove();
   $('#participant-count').textContent = `${app.participants.size}/10`;
 }
@@ -298,6 +369,14 @@ function removePeer(socketId) {
 function closePeers() {
   for (const peer of app.peers.values()) if (!peer.destroyed) peer.destroy();
   app.peers.clear();
+  app.pendingSignals.clear();
+  app.remoteStreams.clear();
+  app.remoteAudioStreams.clear();
+  for (const tile of document.querySelectorAll('.remote-tile')) {
+    tile.querySelector('video').srcObject = null;
+    tile.querySelector('audio').srcObject = null;
+    tile.querySelector('.video-empty').classList.remove('hidden');
+  }
 }
 
 async function rejoinRoom() {
