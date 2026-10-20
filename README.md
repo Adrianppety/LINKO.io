@@ -24,7 +24,7 @@ npm run lint --prefix client
 ## Deploy
 
 - Publique o diretório `client/` na Vercel. Configure `VITE_API_URL` com a origem HTTPS do servidor de sinalização.
-- Publique `server/` como um serviço Node que mantenha WebSockets ativos (por exemplo, Render). Configure `ALLOWED_ORIGINS` com a origem exata do site.
+- Publique `server/` como um serviço Node que mantenha WebSockets ativos (por exemplo, Render). `ALLOWED_ORIGINS` aceita origens adicionais separadas por vírgula; os domínios Vercel atuais (`linkoio-bice` e `linkoio-git-main-adrian-pety`) já são permitidos. Para novos Preview deploys, adicione a origem exata em `ALLOWED_ORIGINS` no Render e reinicie o serviço. Não use `*`.
 - O serviço de sinalização usa estado temporário em memória. Mantenha uma instância; reinícios encerram as salas e múltiplas instâncias exigiriam um adaptador compartilhado.
 - Para atravessar redes que bloqueiam conexões P2P, configure um servidor TURN compatível com credenciais REST do coturn: `TURN_URLS` e `TURN_SHARED_SECRET` somente no backend. Sem TURN, STUN é usado como alternativa e algumas redes podem impedir a chamada.
 

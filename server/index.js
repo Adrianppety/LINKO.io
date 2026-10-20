@@ -4,14 +4,12 @@ const http = require('node:http');
 const path = require('node:path');
 const { Server } = require('socket.io');
 const { RoomRegistry, normalizeNickname } = require('./rooms');
+const { getAllowedOrigins } = require('./cors');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const server = http.createServer(app);
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const allowedOrigins = getAllowedOrigins(process.env.ALLOWED_ORIGINS);
 const io = new Server(server, {
   cors: { origin: allowedOrigins, methods: ['GET', 'POST'] },
   maxHttpBufferSize: 100_000,

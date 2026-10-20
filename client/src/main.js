@@ -146,7 +146,10 @@ $('#join-form').addEventListener('submit', async (event) => {
     if (!result?.ok) throw new Error(result?.message || 'Não foi possível entrar na sala.');
     await activateRoom({ ...result, nickname });
   } catch (error) {
-    homeError.textContent = error.message === 'timeout' ? 'O servidor não respondeu. Tente novamente.' : error.message;
+    const timedOut = error.message === 'timeout' || error.message.includes('timed out');
+    homeError.textContent = timedOut
+      ? 'O servidor demorou para responder. Verifique o serviço de salas e a configuração CORS no Render.'
+      : error.message;
   } finally {
     button.disabled = false;
   }
@@ -642,6 +645,7 @@ async function loadIceServers() {
     $('#network-warning').classList.toggle('hidden', Boolean(config.turnConfigured));
   } catch (error) {
     console.warn('Using STUN fallback:', error);
+    $('#network-warning').textContent = 'Não foi possível consultar o servidor de mídia. Confira ALLOWED_ORIGINS e o status do backend.';
     $('#network-warning').classList.remove('hidden');
   }
 }
