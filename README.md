@@ -2,4 +2,4 @@
 
 Salas temporárias para conversar por voz e vídeo, compartilhar a tela e assistir a vídeos juntos.
 
-[Acesse o LINKO.IO](https://linkoio-bice.vercel.app)
+[Acesse o LINKO.IO](https://linkoio-git-main-adrian-pety.vercel.app)
