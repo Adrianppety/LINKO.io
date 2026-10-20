@@ -43,13 +43,34 @@ const app = {
 };
 
 document.querySelector('#app').innerHTML = `
-  <main class="shell">
+  <div class="app-frame">
+    <aside class="nav-rail" aria-label="Navegação rápida">
+      <a class="rail-brand" href="/" aria-label="LINKO.IO início"><img src="/linko-wordmark.png" alt="" /></a>
+      <span class="rail-badge" title="Compartilhamento até 4K/60 quando suportado">até 4K/60</span>
+      <nav class="rail-links">
+        <a class="rail-link active" href="/" title="Início" aria-label="Início">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>
+        </a>
+        <button class="rail-link" type="button" data-scroll-target="video-grid" title="Participantes" aria-label="Ir para participantes">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a6 6 0 0 1 12 0v1zm13-13a3 3 0 0 1 0 6m2 2a5 5 0 0 1 3 5"/></svg>
+        </button>
+        <button class="rail-link" type="button" data-scroll-target="youtube-card" title="YouTube" aria-label="Ir para YouTube">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/></svg>
+        </button>
+        <button class="rail-link" type="button" data-scroll-target="nickname" title="Criar ou entrar em uma sala" aria-label="Criar ou entrar em uma sala">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </nav>
+      <button class="rail-link rail-settings" id="open-theme-settings" type="button" title="Configurações de tema" aria-label="Configurações de tema">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4 1.4-1.1a7 7 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a7 7 0 0 1 0 2z"/></svg>
+      </button>
+    </aside>
+    <main class="shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Linko início"><img src="/linko-wordmark.png" alt="Linko" /></a>
       <div class="topbar-tools">
         <span class="topbar-note"><i></i> Salas temporárias, sem cadastro</span>
         <a class="bug-report" href="https://github.com/Adrianppety/LINKO.io/issues/new?template=bug_report.yml" target="_blank" rel="noopener noreferrer">Relatar bug</a>
-        <label class="theme-picker" for="theme-select"><span>Tema</span><select id="theme-select" aria-label="Tema visual"><option value="gamer">Gamer neon</option><option value="elegant-dark">Escuro dourado</option></select></label>
       </div>
     </header>
     <section class="home card" id="home">
@@ -96,32 +117,6 @@ document.querySelector('#app').innerHTML = `
               <span class="video-name" id="local-name"></span>
             </article>
           </div>
-          <div class="toolbar">
-            <div class="control-group media-control-group">
-              <span class="control-label">Áudio</span>
-              <button class="button control" id="mic-button" type="button" aria-pressed="false">Ativar microfone</button>
-              <select id="audio-device" aria-label="Selecionar microfone"><option value="">Microfone padrão</option></select>
-            </div>
-            <div class="control-group media-control-group">
-              <span class="control-label">Câmera</span>
-              <button class="button control" id="camera-button" type="button" aria-pressed="false">Ligar câmera</button>
-              <select id="video-device" aria-label="Selecionar câmera"><option value="">Câmera padrão</option></select>
-            </div>
-            <div class="screen-control-group">
-              <span class="control-label">Compartilhamento</span>
-              <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
-              <label class="screen-quality-picker" for="screen-quality">
-                <span>Qualidade</span>
-                <select id="screen-quality" aria-label="Qualidade do compartilhamento de tela">
-                  <option value="auto">Automática</option>
-                  <option value="fluid">Fluida (30 FPS)</option>
-                  <option value="high">Alta (1080p)</option>
-                  <option value="max">Máxima (até 4K / 60 FPS)</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          <p class="screen-quality-status hidden" id="screen-quality-status" role="status"></p>
           <p class="network-warning hidden" id="network-warning">A conexão direta falhou. Configure um servidor TURN para alcançar participantes em redes restritas.</p>
           <details class="diagnostics" id="connection-diagnostics">
             <summary>Diagnóstico WebRTC</summary>
@@ -130,7 +125,7 @@ document.querySelector('#app').innerHTML = `
           </details>
           <button class="button control retry-media hidden" id="retry-media" type="button">Tentar reconectar</button>
         </section>
-        <aside class="youtube card">
+        <aside class="youtube card" id="youtube-card">
           <div class="youtube-heading">
             <div><span class="eyebrow">ASSISTAM JUNTOS</span><h2>YouTube</h2></div>
             <div class="youtube-actions">
@@ -145,6 +140,34 @@ document.querySelector('#app').innerHTML = `
           <div class="player-frame"><div id="youtube-player"></div><p id="youtube-placeholder">Cole um link para começar um vídeo com a sala.</p></div>
           <p class="youtube-note">Reprodução e busca sincronizadas entre participantes.</p>
         </aside>
+      </div>
+      <div class="media-dock" aria-label="Controles de áudio, câmera e compartilhamento">
+        <div class="toolbar">
+          <div class="control-group media-control-group">
+            <span class="control-label">Áudio</span>
+            <button class="button control media-toggle" id="mic-button" type="button" aria-pressed="false">Ativar microfone</button>
+            <select id="audio-device" aria-label="Selecionar microfone"><option value="">Microfone padrão</option></select>
+          </div>
+          <div class="control-group media-control-group">
+            <span class="control-label">Câmera</span>
+            <button class="button control media-toggle" id="camera-button" type="button" aria-pressed="false">Ligar câmera</button>
+            <select id="video-device" aria-label="Selecionar câmera"><option value="">Câmera padrão</option></select>
+          </div>
+          <div class="screen-control-group">
+            <span class="control-label">Compartilhamento de tela</span>
+            <button class="button control media-toggle" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
+            <label class="screen-quality-picker" for="screen-quality">
+              <span>Qualidade</span>
+              <select id="screen-quality" aria-label="Qualidade do compartilhamento de tela">
+                <option value="auto">Automática</option>
+                <option value="fluid">Fluida (30 FPS)</option>
+                <option value="high">Alta (1080p)</option>
+                <option value="max">Máxima (até 4K / 60 FPS)</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <p class="screen-quality-status hidden" id="screen-quality-status" role="status"></p>
       </div>
       <div class="room-footer">
         <button class="updates-button" id="updates-button" type="button" aria-haspopup="dialog" aria-controls="updates-dialog">
@@ -172,7 +195,9 @@ document.querySelector('#app').innerHTML = `
               <li>Botão para tirar o vídeo do YouTube da sala para todos.</li>
               <li>Convite para apoiar o projeto com uma estrela no GitHub.</li>
               <li>Layout responsivo para celular, com controles reorganizados e painel do YouTube adaptado a telas menores.</li>
-              <li>Controles de áudio, câmera e compartilhamento separados em grupos para facilitar o acesso rápido à sala pelo link, sem perfis pessoais.</li>
+              <li>Navegação lateral com atalhos para participantes, YouTube e entrada rápida em salas por link.</li>
+              <li>Dock de áudio, câmera e compartilhamento separado do palco, com indicadores visuais de estado.</li>
+              <li>Temas escuros Gamer neon e Escuro dourado, com escolha inicial e preferência salva.</li>
             </ul>
           </section>
           <section class="updates-section">
@@ -186,14 +211,34 @@ document.querySelector('#app').innerHTML = `
       </dialog>
       <div class="toast hidden" id="toast" role="status"></div>
     </section>
-  </main>`;
+    <dialog class="updates-dialog theme-dialog" id="theme-dialog" aria-labelledby="theme-title">
+      <div class="updates-content">
+        <header class="updates-header">
+          <div><span class="eyebrow">PERSONALIZAÇÃO</span><h2 id="theme-title">Escolha seu tema</h2></div>
+          <button class="updates-close" id="theme-close" type="button" aria-label="Fechar temas">×</button>
+        </header>
+        <div class="theme-options">
+          <button class="theme-option" type="button" data-theme-choice="gamer">
+            <span class="theme-swatch gamer-swatch" aria-hidden="true"></span>
+            <span><strong>Gamer neon</strong><small>Preto, verde e roxo neon</small></span>
+            <span class="theme-check" aria-hidden="true">✓</span>
+          </button>
+          <button class="theme-option" type="button" data-theme-choice="elegant-dark">
+            <span class="theme-swatch dark-swatch" aria-hidden="true"></span>
+            <span><strong>Escuro dourado</strong><small>Grafite, verde e dourado</small></span>
+            <span class="theme-check" aria-hidden="true">✓</span>
+          </button>
+        </div>
+      </div>
+    </dialog>
+    </main>
+  </div>`;
 
 const $ = (selector) => document.querySelector(selector);
 const home = $('#home');
 const room = $('#room');
 const homeError = $('#home-error');
 const themes = new Set(['elegant-dark', 'gamer']);
-const themeSelect = $('#theme-select');
 const roomFromUrl = new URLSearchParams(window.location.search).get('room') || new URLSearchParams(window.location.search).get('roomId');
 
 $('#updates-button').addEventListener('click', () => $('#updates-dialog').showModal());
@@ -202,23 +247,55 @@ $('#updates-dialog').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
 
+const themeDialog = $('#theme-dialog');
+$('#open-theme-settings').addEventListener('click', () => themeDialog.showModal());
+$('#theme-close').addEventListener('click', () => themeDialog.close());
+themeDialog.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) themeDialog.close();
+});
+for (const button of document.querySelectorAll('[data-theme-choice]')) {
+  button.addEventListener('click', () => {
+    const theme = button.dataset.themeChoice;
+    if (!themes.has(theme)) return;
+    setTheme(theme);
+    try {
+      localStorage.setItem('linko-theme', theme);
+    } catch (error) {
+      console.warn('Não foi possível salvar a preferência de tema:', error);
+    }
+    themeDialog.close();
+  });
+}
+for (const link of document.querySelectorAll('[data-scroll-target]')) {
+  link.addEventListener('click', () => {
+    const target = document.getElementById(link.dataset.scrollTarget);
+    if (target?.getClientRects().length) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (target.id === 'nickname') target.focus({ preventScroll: true });
+      return;
+    }
+    if (target?.id === 'nickname' && !room.classList.contains('hidden')) {
+      leaveRoom(true);
+      target.focus({ preventScroll: true });
+      return;
+    }
+    showToast('Crie ou entre em uma sala para acessar esta área.');
+  });
+}
+
 let savedTheme = 'gamer';
+let hasSavedTheme = false;
 try {
   const preference = localStorage.getItem('linko-theme');
-  if (themes.has(preference)) savedTheme = preference;
+  if (themes.has(preference)) {
+    savedTheme = preference;
+    hasSavedTheme = true;
+  }
 } catch (error) {
   console.warn('Não foi possível ler a preferência de tema:', error);
 }
 setTheme(savedTheme);
-themeSelect.addEventListener('change', () => {
-  if (!themes.has(themeSelect.value)) return;
-  setTheme(themeSelect.value);
-  try {
-    localStorage.setItem('linko-theme', themeSelect.value);
-  } catch (error) {
-    console.warn('Não foi possível salvar a preferência de tema:', error);
-  }
-});
+if (!hasSavedTheme) themeDialog.showModal();
 
 if (roomFromUrl) {
   $('#join-button').innerHTML = 'Entrar na sala <span aria-hidden="true">↗</span>';
@@ -1386,7 +1463,9 @@ function showToast(message) {
 
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  themeSelect.value = theme;
+  for (const button of document.querySelectorAll('[data-theme-choice]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme));
+  }
   document.querySelector('meta[name="theme-color"]').content = theme === 'gamer' ? '#09090b' : '#121214';
 }
 
