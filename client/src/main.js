@@ -10,6 +10,9 @@ const app = {
   localStream: null,
   featuredSocketId: null,
   peers: new Map(),
+  peerRetryAttempts: new Map(),
+  peerRetryTimers: new Map(),
+  failedPeerIds: new Set(),
   pendingSignals: new Map(),
   participants: new Map(),
   remoteStreams: new Map(),
@@ -20,6 +23,7 @@ const app = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   screenTrack: null,
   screenStream: null,
+  turnConfigured: false,
   youtubePlayer: null,
   youtubeApiPromise: null,
   youtubeSuppressUntil: 0,
@@ -92,7 +96,8 @@ document.querySelector('#app').innerHTML = `
             </div>
             <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
           </div>
-          <p class="network-warning hidden" id="network-warning">TURN não configurado: redes restritas podem impedir a conexão de áudio e vídeo.</p>
+          <p class="network-warning hidden" id="network-warning">A conexão direta falhou. Configure um servidor TURN para alcançar participantes em redes restritas.</p>
+          <button class="button control retry-media hidden" id="retry-media" type="button">Tentar reconectar</button>
         </section>
         <aside class="youtube card">
           <div class="youtube-heading"><div><span class="eyebrow">ASSISTAM JUNTOS</span><h2>YouTube</h2></div><span class="youtube-mark">▶</span></div>
@@ -390,11 +395,44 @@ function createPeer(socketId, initiator) {
     });
   });
   peer.on('track', (track, stream) => attachRemoteTrack(socketId, track, stream));
-  peer.on('connect', () => setConnection(true, 'Conectado à sala'));
-  peer.on('close', () => app.peers.delete(socketId));
+  peer.on('connect', () => {
+    clearTimeout(app.peerRetryTimers.get(socketId));
+    app.peerRetryTimers.delete(socketId);
+    app.peerRetryAttempts.delete(socketId);
+    app.failedPeerIds.delete(socketId);
+    const hasFailedPeers = app.failedPeerIds.size > 0;
+    $('#retry-media').classList.toggle('hidden', !hasFailedPeers);
+    if (!hasFailedPeers) {
+      $('#network-warning').textContent = 'TURN não configurado: redes restritas podem impedir a conexão de áudio e vídeo.';
+      $('#network-warning').classList.toggle('hidden', app.turnConfigured);
+    }
+    setConnection(true, 'Conectado à sala');
+  });
+  peer.on('close', () => {
+    if (app.peers.get(socketId) === peer) app.peers.delete(socketId);
+  });
   peer.on('error', (error) => {
-    console.warn('WebRTC peer error:', error.message);
-    setConnection(false, 'Tentando restabelecer mídia…');
+    if (app.peers.get(socketId) !== peer || !app.isInRoom) return;
+    app.peers.delete(socketId);
+    const attempt = (app.peerRetryAttempts.get(socketId) || 0) + 1;
+    app.peerRetryAttempts.set(socketId, attempt);
+    console.debug(`WebRTC peer ${error.code || 'error'}; reconnect attempt ${attempt}/3`);
+    if (attempt <= 3) {
+      setConnection(false, `Reconectando mídia (${attempt}/3)…`);
+      const delay = attempt * 1500;
+      const timer = setTimeout(() => {
+        app.peerRetryTimers.delete(socketId);
+        if (!app.isInRoom || !app.participants.has(socketId) || app.peers.has(socketId)) return;
+        createPeer(socketId, socket.id.localeCompare(socketId) < 0);
+      }, delay);
+      app.peerRetryTimers.set(socketId, timer);
+      return;
+    }
+    app.failedPeerIds.add(socketId);
+    setConnection(false, 'Sem conexão de vídeo — confira a rede');
+    $('#network-warning').textContent = 'Não foi possível conectar este participante. A rede pode exigir TURN; configure TURN_URLS e TURN_SHARED_SECRET no servidor.';
+    $('#network-warning').classList.remove('hidden');
+    $('#retry-media').classList.remove('hidden');
   });
   const pendingSignals = app.pendingSignals.get(socketId) || [];
   app.pendingSignals.delete(socketId);
@@ -515,6 +553,16 @@ function updateRemoteVideoState(tile) {
 }
 
 function removePeer(socketId) {
+  clearTimeout(app.peerRetryTimers.get(socketId));
+  app.peerRetryTimers.delete(socketId);
+  app.peerRetryAttempts.delete(socketId);
+  app.failedPeerIds.delete(socketId);
+  const hasFailedPeers = app.failedPeerIds.size > 0;
+  $('#retry-media').classList.toggle('hidden', !hasFailedPeers);
+  if (!hasFailedPeers) {
+    $('#network-warning').textContent = 'TURN não configurado: redes restritas podem impedir a conexão de áudio e vídeo.';
+    $('#network-warning').classList.toggle('hidden', app.turnConfigured);
+  }
   const peer = app.peers.get(socketId);
   app.peers.delete(socketId);
   app.pendingSignals.delete(socketId);
@@ -531,6 +579,11 @@ function removePeer(socketId) {
 }
 
 function closePeers() {
+  for (const timer of app.peerRetryTimers.values()) clearTimeout(timer);
+  app.peerRetryTimers.clear();
+  app.peerRetryAttempts.clear();
+  app.failedPeerIds.clear();
+  $('#retry-media').classList.add('hidden');
   for (const peer of app.peers.values()) if (!peer.destroyed) peer.destroy();
   app.peers.clear();
   app.pendingSignals.clear();
@@ -545,6 +598,18 @@ function closePeers() {
     tile.querySelector('.video-empty').classList.remove('hidden');
   }
 }
+
+$('#retry-media').addEventListener('click', () => {
+  const failedSocketIds = Array.from(app.failedPeerIds);
+  app.failedPeerIds.clear();
+  $('#retry-media').classList.add('hidden');
+  for (const socketId of failedSocketIds) {
+    if (!app.participants.has(socketId)) continue;
+    app.peerRetryAttempts.delete(socketId);
+    createPeer(socketId, socket.id.localeCompare(socketId) < 0);
+  }
+  if (failedSocketIds.length) setConnection(false, 'Tentando reconectar mídia…');
+});
 
 async function rejoinRoom() {
   try {
@@ -909,6 +974,7 @@ async function loadIceServers() {
     if (!response.ok) throw new Error(`ICE configuration returned ${response.status}`);
     const config = await response.json();
     app.iceServers = config.iceServers;
+    app.turnConfigured = Boolean(config.turnConfigured);
     $('#network-warning').classList.toggle('hidden', Boolean(config.turnConfigured));
   } catch (error) {
     console.warn('Using STUN fallback:', error);
