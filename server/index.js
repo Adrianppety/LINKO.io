@@ -18,6 +18,7 @@ const io = new Server(server, {
   pingTimeout: 20_000
 });
 const rooms = new RoomRegistry();
+const screenStreams = new Map();
 
 app.use((request, response, next) => {
   const origin = request.get('origin');
@@ -71,12 +72,24 @@ io.on('connection', (socket) => {
     if (!result.ok) return reply(acknowledge, { ok: false, message: result.message });
     socket.join(result.roomId);
     if (!result.alreadyJoined) {
-      socket.to(result.roomId).emit('user-connected', { socketId: socket.id, nickname });
+      socket.to(result.roomId).emit('user-connected', { socketId: socket.id, nickname, screenStreamId: null });
     }
     reply(acknowledge, roomResponse(result, socket.id));
   });
 
   socket.on('leave-room', () => leaveRoom(socket));
+  socket.on('participant-media-state', (payload = {}, acknowledge) => {
+    if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Estado de mídia inválido.' });
+    const participant = rooms.getParticipant(socket.id);
+    const screenStreamId = payload.screenStreamId;
+    if (!participant || (screenStreamId !== null && !isValidMediaStreamId(screenStreamId))) {
+      return reply(acknowledge, { ok: false, message: 'Estado de mídia inválido.' });
+    }
+    if (screenStreamId) screenStreams.set(socket.id, screenStreamId);
+    else screenStreams.delete(socket.id);
+    io.to(participant.roomId).emit('participant-media-state', { socketId: socket.id, screenStreamId });
+    reply(acknowledge, { ok: true });
+  });
   socket.on('signal', (payload = {}, acknowledge) => {
     if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Sinalização inválida.' });
     const source = rooms.getParticipant(socket.id);
@@ -109,7 +122,8 @@ function roomResponse(result, socketId) {
     ok: true,
     roomId: result.roomId,
     participants: Array.from(room.participants, ([id, nickname]) => ({ socketId: id, nickname }))
-      .filter((participant) => participant.socketId !== socketId),
+      .filter((participant) => participant.socketId !== socketId)
+      .map((participant) => ({ ...participant, screenStreamId: screenStreams.get(participant.socketId) || null })),
     youtubeState: room.youtubeState
   };
 }
@@ -117,6 +131,7 @@ function roomResponse(result, socketId) {
 function leaveRoom(socket) {
   const result = rooms.leave(socket.id);
   if (!result) return;
+  screenStreams.delete(socket.id);
   socket.to(result.roomId).emit('user-disconnected', { socketId: socket.id, nickname: result.nickname });
   socket.leave(result.roomId);
 }
@@ -137,6 +152,10 @@ function validateYoutubeControl(payload) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidMediaStreamId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 }
 
 function reply(acknowledge, response) {

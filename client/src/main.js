@@ -14,10 +14,12 @@ const app = {
   participants: new Map(),
   remoteStreams: new Map(),
   remoteAudioStreams: new Map(),
+  remoteVideoTracks: new Map(),
+  remoteScreenStreamIds: new Map(),
+  selectedRemoteVideoTracks: new Map(),
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   screenTrack: null,
   screenStream: null,
-  screenReplacedCamera: false,
   youtubePlayer: null,
   youtubeApiPromise: null,
   youtubeSuppressUntil: 0,
@@ -171,11 +173,14 @@ async function activateRoom(data) {
   app.localStream = new MediaStream();
   home.classList.add('hidden');
   room.classList.remove('hidden');
-  $('#room-name').textContent = `Sala ${data.roomId.slice(0, 6)}`;
+  $('#room-name').innerHTML = `Sala <span class="room-code">${formatRoomCode(data.roomId)}</span>`;
   $('#room-link').value = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(data.roomId)}`;
   $('#local-name').textContent = `${app.nickname} (você)`;
   $('#local-video').srcObject = app.localStream;
   app.participants = new Map([[socket.id, app.nickname], ...(data.participants || []).map((participant) => [participant.socketId, participant.nickname])]);
+  for (const participant of data.participants || []) {
+    if (participant.screenStreamId) app.remoteScreenStreamIds.set(participant.socketId, participant.screenStreamId);
+  }
   renderParticipants();
   history.replaceState({}, '', `?room=${encodeURIComponent(data.roomId)}`);
   enumerateDevices();
@@ -195,6 +200,7 @@ socket.on('connect_error', () => setConnection(false, 'Sem conexão com o servid
 socket.on('user-connected', (participant) => {
   if (!app.isInRoom || !participant?.socketId) return;
   app.participants.set(participant.socketId, participant.nickname);
+  if (participant.screenStreamId) app.remoteScreenStreamIds.set(participant.socketId, participant.screenStreamId);
   renderParticipants();
   createPeer(participant.socketId, true);
 });
@@ -219,6 +225,17 @@ socket.on('signal', ({ from, signal }) => {
   app.pendingSignals.set(from, pending);
 });
 socket.on('youtube-control', (state) => applyYoutubeState(state));
+socket.on('participant-media-state', ({ socketId, screenStreamId }) => {
+  if (!app.isInRoom || !app.participants.has(socketId)) return;
+  if (socketId === socket.id) return;
+  if (screenStreamId) app.remoteScreenStreamIds.set(socketId, screenStreamId);
+  else app.remoteScreenStreamIds.delete(socketId);
+  const screenTrack = screenStreamId
+    ? Array.from(app.remoteVideoTracks.get(socketId)?.values() || [])
+      .find(({ streamId }) => streamId === screenStreamId)?.track
+    : null;
+  updateRemoteVideoTile(socketId, screenTrack?.id);
+});
 
 function setConnection(connected, label) {
   $('#connection-label').textContent = label;
@@ -244,6 +261,10 @@ function renderParticipants() {
     const audio = document.createElement('audio');
     audio.autoplay = true;
     audio.hidden = true;
+    const sourceSelect = document.createElement('select');
+    sourceSelect.className = 'video-source-select';
+    sourceSelect.hidden = true;
+    sourceSelect.setAttribute('aria-label', `Selecionar vídeo de ${nickname}`);
     const empty = document.createElement('div');
     empty.className = 'video-empty';
     empty.innerHTML = `<span class="avatar">${escapeHtml(nickname.slice(0, 2).toUpperCase())}</span><span>Aguardando mídia…</span>`;
@@ -264,7 +285,7 @@ function renderParticipants() {
     name.textContent = nickname;
     const tileActions = document.createElement('div');
     tileActions.className = 'tile-actions';
-    tileActions.append(focusToggle, fullscreenToggle);
+    tileActions.append(sourceSelect, focusToggle, fullscreenToggle);
     tile.append(video, audio, empty, tileActions, name);
     grid.append(tile);
   }
@@ -284,6 +305,13 @@ $('#video-grid').addEventListener('click', (event) => {
   const tile = button.closest('.video-tile');
   const socketId = tile.id === 'self-tile' ? 'self' : tile.dataset.socketId;
   setFeaturedTile(app.featuredSocketId === socketId ? null : socketId);
+});
+
+$('#video-grid').addEventListener('change', (event) => {
+  if (event.target.matches('.video-source-select')) {
+    const tile = event.target.closest('.remote-tile');
+    if (tile) selectRemoteVideoTrack(tile.dataset.socketId, event.target.value);
+  }
 });
 
 $('#video-grid').addEventListener('dblclick', (event) => {
@@ -335,6 +363,10 @@ function escapeHtml(value) {
   return element.innerHTML;
 }
 
+function formatRoomCode(roomId) {
+  return roomId.match(/.{1,4}/g).join(' · ').toUpperCase();
+}
+
 function createPeer(socketId, initiator) {
   if (app.peers.has(socketId) || !app.localStream) return;
   const peer = new SimplePeer({
@@ -346,15 +378,9 @@ function createPeer(socketId, initiator) {
   for (const track of app.localStream.getAudioTracks()) peer.addTrack(track, app.localStream);
   const cameraTrack = app.localStream.getVideoTracks()[0];
   if (app.screenTrack) {
-    if (app.screenReplacedCamera && cameraTrack) {
-      peer.addTrack(cameraTrack, app.localStream);
-      peer.replaceTrack(cameraTrack, app.screenTrack, app.localStream);
-    } else {
-      peer.addTrack(app.screenTrack, app.screenStream);
-    }
-  } else if (cameraTrack) {
-    peer.addTrack(cameraTrack, app.localStream);
+    peer.addTrack(app.screenTrack, app.screenStream);
   }
+  if (cameraTrack) peer.addTrack(cameraTrack, app.localStream);
   peer.on('signal', (signal) => {
     socket.timeout(8000).emit('signal', { targetSocketId: socketId, signal }, (error, response) => {
       if (error || !response?.ok) {
@@ -363,7 +389,7 @@ function createPeer(socketId, initiator) {
       }
     });
   });
-  peer.on('track', (track) => attachRemoteTrack(socketId, track));
+  peer.on('track', (track, stream) => attachRemoteTrack(socketId, track, stream));
   peer.on('connect', () => setConnection(true, 'Conectado à sala'));
   peer.on('close', () => app.peers.delete(socketId));
   peer.on('error', (error) => {
@@ -375,7 +401,7 @@ function createPeer(socketId, initiator) {
   for (const signal of pendingSignals) peer.signal(signal);
 }
 
-function attachRemoteTrack(socketId, track) {
+function attachRemoteTrack(socketId, track, stream) {
   const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
   if (!tile) return;
   let combinedStream = app.remoteStreams.get(socketId);
@@ -395,16 +421,71 @@ function attachRemoteTrack(socketId, track) {
       const audio = tile.querySelector('audio');
       audio.srcObject = audioStream;
       playRemoteAudio(audio);
+    } else {
+      let videoTracks = app.remoteVideoTracks.get(socketId);
+      if (!videoTracks) {
+        videoTracks = new Map();
+        app.remoteVideoTracks.set(socketId, videoTracks);
+      }
+      videoTracks.set(track.id, { track, streamId: stream?.id || null });
+      const screenStreamId = app.remoteScreenStreamIds.get(socketId);
+      updateRemoteVideoTile(socketId, stream?.id === screenStreamId ? track.id : undefined);
     }
     track.addEventListener('ended', () => {
       if (combinedStream.getTracks().some((current) => current.id === track.id)) combinedStream.removeTrack(track);
       const audioStream = app.remoteAudioStreams.get(socketId);
       if (audioStream?.getTracks().some((current) => current.id === track.id)) audioStream.removeTrack(track);
+      app.remoteVideoTracks.get(socketId)?.delete(track.id);
+      if (app.selectedRemoteVideoTracks.get(socketId) === track.id) app.selectedRemoteVideoTracks.delete(socketId);
+      updateRemoteVideoTile(socketId);
       updateRemoteVideoState(tile);
     }, { once: true });
   }
+  if (track.kind === 'audio') updateRemoteVideoState(tile);
+}
+
+function updateRemoteVideoTile(socketId, preferredTrackId) {
+  const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
+  if (!tile) return;
+  const tracks = Array.from(app.remoteVideoTracks.get(socketId)?.values() || [])
+    .filter(({ track }) => track.readyState === 'live');
+  const select = tile.querySelector('.video-source-select');
+  const previousSelection = app.selectedRemoteVideoTracks.get(socketId);
+  const selectedTrack = tracks.find(({ track }) => track.id === preferredTrackId)
+    || tracks.find(({ track }) => track.id === previousSelection)
+    || tracks.find(({ streamId }) => streamId === app.remoteScreenStreamIds.get(socketId))
+    || tracks[0];
+  select.replaceChildren();
+  let cameraIndex = 0;
+  tracks.forEach(({ track, streamId }) => {
+    const isScreen = streamId && streamId === app.remoteScreenStreamIds.get(socketId);
+    const label = isScreen ? 'Tela compartilhada' : tracks.length > 1 ? `Câmera ${++cameraIndex}` : 'Câmera';
+    select.add(new Option(label, track.id));
+  });
+  select.hidden = tracks.length < 2;
+  if (!selectedTrack) {
+    app.selectedRemoteVideoTracks.delete(socketId);
+    tile.querySelector('video').srcObject = null;
+    return;
+  }
+  app.selectedRemoteVideoTracks.set(socketId, selectedTrack.track.id);
+  select.value = selectedTrack.track.id;
   const video = tile.querySelector('video');
-  video.srcObject = combinedStream;
+  if (video.srcObject?.getVideoTracks()[0]?.id !== selectedTrack.track.id) {
+    video.srcObject = new MediaStream([selectedTrack.track]);
+    video.play().catch((error) => console.warn('Remote video playback was blocked:', error.message));
+  }
+  updateRemoteVideoState(tile);
+}
+
+function selectRemoteVideoTrack(socketId, trackId) {
+  const entry = app.remoteVideoTracks.get(socketId)?.get(trackId);
+  if (!entry) return;
+  app.selectedRemoteVideoTracks.set(socketId, trackId);
+  const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
+  const video = tile?.querySelector('video');
+  if (!video) return;
+  video.srcObject = new MediaStream([entry.track]);
   video.play().catch((error) => console.warn('Remote video playback was blocked:', error.message));
   updateRemoteVideoState(tile);
 }
@@ -442,6 +523,9 @@ function removePeer(socketId) {
   if (app.featuredSocketId === socketId) setFeaturedTile(null);
   app.remoteStreams.delete(socketId);
   app.remoteAudioStreams.delete(socketId);
+  app.remoteVideoTracks.delete(socketId);
+  app.remoteScreenStreamIds.delete(socketId);
+  app.selectedRemoteVideoTracks.delete(socketId);
   $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`)?.remove();
   $('#participant-count').textContent = `${app.participants.size}/10`;
 }
@@ -452,6 +536,9 @@ function closePeers() {
   app.pendingSignals.clear();
   app.remoteStreams.clear();
   app.remoteAudioStreams.clear();
+  app.remoteVideoTracks.clear();
+  app.remoteScreenStreamIds.clear();
+  app.selectedRemoteVideoTracks.clear();
   for (const tile of document.querySelectorAll('.remote-tile')) {
     tile.querySelector('video').srcObject = null;
     tile.querySelector('audio').srcObject = null;
@@ -464,6 +551,10 @@ async function rejoinRoom() {
     const result = await socket.timeout(12_000).emitWithAck('join-room', { roomId: app.roomId, nickname: app.nickname });
     if (!result?.ok) throw new Error(result?.message || 'A sala foi encerrada.');
     app.participants = new Map([[socket.id, app.nickname], ...result.participants.map((participant) => [participant.socketId, participant.nickname])]);
+    app.remoteScreenStreamIds.clear();
+    for (const participant of result.participants) {
+      if (participant.screenStreamId) app.remoteScreenStreamIds.set(participant.socketId, participant.screenStreamId);
+    }
     renderParticipants();
     for (const participant of result.participants) createPeer(participant.socketId, false);
     setConnection(true, 'Conectado à sala');
@@ -532,12 +623,7 @@ async function switchDevice(kind, deviceId) {
   const previous = app.localStream.getTracks().find((track) => track.kind === kind);
   try {
     for (const peer of app.peers.values()) {
-      if (kind === 'video' && app.screenTrack) {
-        if (previous && app.screenReplacedCamera) {
-          peer.replaceTrack(app.screenTrack, nextTrack, app.localStream);
-          peer.replaceTrack(nextTrack, app.screenTrack, app.localStream);
-        }
-      } else if (previous) {
+      if (previous) {
         peer.replaceTrack(previous, nextTrack, app.localStream);
       } else {
         peer.addTrack(nextTrack, app.localStream);
@@ -617,12 +703,12 @@ $('#screen-button').addEventListener('click', async () => {
       audio: false
     });
     app.screenTrack = app.screenStream.getVideoTracks()[0];
+    if (!app.screenTrack) throw new Error('Não foi possível iniciar a captura da tela.');
     app.screenTrack.contentHint = 'detail';
-    const cameraTrack = app.localStream?.getVideoTracks()[0];
-    app.screenReplacedCamera = Boolean(cameraTrack);
+    await publishScreenState(app.screenStream.id);
     for (const peer of app.peers.values()) {
-      if (cameraTrack) peer.replaceTrack(cameraTrack, app.screenTrack, app.localStream);
-      else peer.addTrack(app.screenTrack, app.screenStream);
+      if (peer.destroyed) continue;
+      peer.addTrack(app.screenTrack, app.screenStream);
     }
     $('#local-video').srcObject = app.screenStream;
     $('#local-empty').classList.add('hidden');
@@ -631,27 +717,48 @@ $('#screen-button').addEventListener('click', async () => {
     $('#screen-button').setAttribute('aria-pressed', 'true');
     app.screenTrack.addEventListener('ended', stopScreenShare, { once: true });
   } catch (error) {
-    if (app.screenTrack) stopScreenShare();
-    if (error.name !== 'NotAllowedError') showToast(mediaError(error));
+    if (app.screenStream) {
+      for (const peer of app.peers.values()) {
+        if (!app.screenTrack || peer.destroyed) continue;
+        try {
+          peer.removeTrack(app.screenTrack, app.screenStream);
+        } catch (removeError) {
+          console.warn('Could not roll back the shared screen from a peer:', removeError.message);
+        }
+      }
+      for (const track of app.screenStream.getTracks()) track.stop();
+      app.screenStream = null;
+      app.screenTrack = null;
+      publishScreenState(null).catch((stateError) => console.warn('Could not clear screen share state:', stateError.message));
+    }
+    if (error.name !== 'NotAllowedError') {
+      showToast(error.name === 'Error' ? error.message : mediaError(error));
+    }
   }
 });
+
+async function publishScreenState(screenStreamId) {
+  if (!socket.connected) throw new Error('A conexão com a sala foi interrompida.');
+  const result = await socket.timeout(8000).emitWithAck('participant-media-state', { screenStreamId });
+  if (!result?.ok) throw new Error(result?.message || 'Não foi possível atualizar o estado da tela compartilhada.');
+}
 
 function stopScreenShare() {
   if (!app.screenTrack) return;
   const screenTrack = app.screenTrack;
-  const cameraTrack = app.localStream?.getVideoTracks()[0];
   for (const peer of app.peers.values()) {
-    if (app.screenReplacedCamera && cameraTrack) {
-      peer.replaceTrack(screenTrack, cameraTrack, app.localStream);
-    } else if (app.screenStream) {
-      peer.removeTrack(screenTrack, app.screenStream);
-      if (cameraTrack) peer.addTrack(cameraTrack, app.localStream);
+    if (app.screenStream) {
+      try {
+        peer.removeTrack(screenTrack, app.screenStream);
+      } catch (error) {
+        console.warn('Could not remove the shared screen from a peer:', error.message);
+      }
     }
   }
+  publishScreenState(null).catch((error) => console.warn('Could not clear screen share state:', error.message));
   screenTrack.stop();
   app.screenStream = null;
   app.screenTrack = null;
-  app.screenReplacedCamera = false;
   $('#local-video').srcObject = app.localStream;
   $('#screen-button').textContent = 'Compartilhar tela';
   $('#screen-button').classList.remove('selected');
