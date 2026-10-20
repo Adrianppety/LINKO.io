@@ -49,7 +49,7 @@ document.querySelector('#app').innerHTML = `
       <div class="topbar-tools">
         <span class="topbar-note"><i></i> Salas temporárias, sem cadastro</span>
         <a class="bug-report" href="https://github.com/Adrianppety/LINKO.io/issues/new?template=bug_report.yml" target="_blank" rel="noopener noreferrer">Relatar bug</a>
-        <label class="theme-picker" for="theme-select"><span>Tema</span><select id="theme-select" aria-label="Tema visual"><option value="elegant-light">Claro</option><option value="elegant-dark">Escuro</option><option value="gamer">Gamer</option></select></label>
+        <label class="theme-picker" for="theme-select"><span>Tema</span><select id="theme-select" aria-label="Tema visual"><option value="gamer">Gamer neon</option><option value="elegant-dark">Escuro dourado</option></select></label>
       </div>
     </header>
     <section class="home card" id="home">
@@ -97,24 +97,29 @@ document.querySelector('#app').innerHTML = `
             </article>
           </div>
           <div class="toolbar">
-            <div class="control-group">
+            <div class="control-group media-control-group">
+              <span class="control-label">Áudio</span>
               <button class="button control" id="mic-button" type="button" aria-pressed="false">Ativar microfone</button>
               <select id="audio-device" aria-label="Selecionar microfone"><option value="">Microfone padrão</option></select>
             </div>
-            <div class="control-group">
+            <div class="control-group media-control-group">
+              <span class="control-label">Câmera</span>
               <button class="button control" id="camera-button" type="button" aria-pressed="false">Ligar câmera</button>
               <select id="video-device" aria-label="Selecionar câmera"><option value="">Câmera padrão</option></select>
             </div>
-            <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
-            <label class="screen-quality-picker" for="screen-quality">
-              <span>Qualidade</span>
-              <select id="screen-quality" aria-label="Qualidade do compartilhamento de tela">
-                <option value="auto">Automática</option>
-                <option value="fluid">Fluida (30 FPS)</option>
-                <option value="high">Alta (1080p)</option>
-                <option value="max">Máxima (até 4K / 60 FPS)</option>
-              </select>
-            </label>
+            <div class="screen-control-group">
+              <span class="control-label">Compartilhamento</span>
+              <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
+              <label class="screen-quality-picker" for="screen-quality">
+                <span>Qualidade</span>
+                <select id="screen-quality" aria-label="Qualidade do compartilhamento de tela">
+                  <option value="auto">Automática</option>
+                  <option value="fluid">Fluida (30 FPS)</option>
+                  <option value="high">Alta (1080p)</option>
+                  <option value="max">Máxima (até 4K / 60 FPS)</option>
+                </select>
+              </label>
+            </div>
           </div>
           <p class="screen-quality-status hidden" id="screen-quality-status" role="status"></p>
           <p class="network-warning hidden" id="network-warning">A conexão direta falhou. Configure um servidor TURN para alcançar participantes em redes restritas.</p>
@@ -141,13 +146,44 @@ document.querySelector('#app').innerHTML = `
           <p class="youtube-note">Reprodução e busca sincronizadas entre participantes.</p>
         </aside>
       </div>
-      <div class="star-cta">
+      <div class="room-footer">
+        <button class="updates-button" id="updates-button" type="button" aria-haspopup="dialog" aria-controls="updates-dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.64 5.64l2.83 2.83m7.06 7.06 2.83 2.83m0-12.72-2.83 2.83m-7.06 7.06-2.83 2.83"/></svg>
+          Novidades
+        </button>
+        <div class="star-cta">
         <span>Curtiu o LINKO.IO? Uma estrela no GitHub ajuda muito!</span>
         <a href="https://github.com/Adrianppety/LINKO.io" target="_blank" rel="noopener noreferrer" aria-label="Abrir repositório LINKO.IO no GitHub e deixar uma estrela">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></svg>
           Deixar uma estrela
         </a>
+        </div>
       </div>
+      <dialog class="updates-dialog" id="updates-dialog" aria-labelledby="updates-title">
+        <div class="updates-content">
+          <header class="updates-header">
+            <div><span class="eyebrow">LINKO.IO</span><h2 id="updates-title">Novidades</h2></div>
+            <button class="updates-close" id="updates-close" type="button" aria-label="Fechar novidades">×</button>
+          </header>
+          <section class="updates-section">
+            <h3>O que já fizemos</h3>
+            <ul>
+              <li>Compartilhamento de tela com perfis de qualidade, incluindo até 60 FPS quando o dispositivo e a rede suportam.</li>
+              <li>Botão para tirar o vídeo do YouTube da sala para todos.</li>
+              <li>Convite para apoiar o projeto com uma estrela no GitHub.</li>
+              <li>Layout responsivo para celular, com controles reorganizados e painel do YouTube adaptado a telas menores.</li>
+              <li>Controles de áudio, câmera e compartilhamento separados em grupos para facilitar o acesso rápido à sala pelo link, sem perfis pessoais.</li>
+            </ul>
+          </section>
+          <section class="updates-section">
+            <h3>Próximas melhorias</h3>
+            <ul>
+              <li>Deixar mais claros os estados da sala, como conexão e câmera desligada.</li>
+              <li>Simplificar os controles de compartilhamento e explicar os perfis de qualidade.</li>
+            </ul>
+          </section>
+        </div>
+      </dialog>
       <div class="toast hidden" id="toast" role="status"></div>
     </section>
   </main>`;
@@ -156,11 +192,17 @@ const $ = (selector) => document.querySelector(selector);
 const home = $('#home');
 const room = $('#room');
 const homeError = $('#home-error');
-const themes = new Set(['elegant-light', 'elegant-dark', 'gamer']);
+const themes = new Set(['elegant-dark', 'gamer']);
 const themeSelect = $('#theme-select');
 const roomFromUrl = new URLSearchParams(window.location.search).get('room') || new URLSearchParams(window.location.search).get('roomId');
 
-let savedTheme = 'elegant-light';
+$('#updates-button').addEventListener('click', () => $('#updates-dialog').showModal());
+$('#updates-close').addEventListener('click', () => $('#updates-dialog').close());
+$('#updates-dialog').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
+
+let savedTheme = 'gamer';
 try {
   const preference = localStorage.getItem('linko-theme');
   if (themes.has(preference)) savedTheme = preference;
@@ -1345,7 +1387,7 @@ function showToast(message) {
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   themeSelect.value = theme;
-  document.querySelector('meta[name="theme-color"]').content = theme === 'elegant-light' ? '#fbf9f5' : '#121214';
+  document.querySelector('meta[name="theme-color"]').content = theme === 'gamer' ? '#09090b' : '#121214';
 }
 
 async function loadIceServers() {
