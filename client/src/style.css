@@ -110,6 +110,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection-dot.online { background: var(--accent); box-shadow: 0 0 0 5px #22c55e1a; }
 .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); align-content: start; gap: 9px; min-height: 210px; margin: 16px 0; }
 .video-tile { position: relative; overflow: hidden; min-width: 0; min-height: 150px; aspect-ratio: 16 / 10; border-radius: 12px; background: #191b19; }
+.video-tile.screen-tile { grid-column: 1 / -1; min-height: 220px; aspect-ratio: 16 / 9; background: #080909; }
 .video-tile.featured { grid-column: 1 / -1; order: -1; min-height: 280px; max-height: 70vh; aspect-ratio: 16 / 9; }
 .video-tile video { position: absolute; width: 100%; height: 100%; inset: 0; object-fit: contain; }
 .video-tile:fullscreen { display: grid; width: 100vw; height: 100vh; min-height: 0; max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
@@ -128,6 +129,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .control-group { display: flex; gap: 5px; }
 .control { min-height: 38px; padding: 0 11px; font-size: 10px; }
 .control-group select { width: 125px; height: 38px; padding: 0 7px; font-size: 10px; }
+.screen-quality-picker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.screen-quality-picker select { width: auto; min-width: 150px; height: 38px; padding: 0 9px; font-size: 10px; }
+.screen-quality-status { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .control.selected { border-color: var(--selected-border); background: var(--selected-bg); color: var(--accent-dark); }
 .network-warning { margin: 12px 0 0; color: #875b15; font-size: 10px; line-height: 1.5; }
 .diagnostics { margin-top: 12px; color: var(--muted); font-size: 10px; line-height: 1.6; }
@@ -174,10 +178,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .stage, .youtube { padding: 15px; }
   .video-grid { grid-template-columns: 1fr; }
   .video-tile { min-height: 205px; }
+  .video-tile.screen-tile { grid-column: 1; min-height: 220px; }
   .video-tile.featured { min-height: 230px; max-height: 60vh; }
   .toolbar { align-items: stretch; flex-direction: column; }
   .control-group .control { flex: 1; }
   .control-group select { width: 44%; }
+  .screen-quality-picker { justify-content: space-between; }
+  .screen-quality-picker select { flex: 1; }
   .youtube { display: flex; flex-direction: column; }
   .youtube-heading { margin-bottom: 16px; }
   .player-frame { margin-top: 13px; }

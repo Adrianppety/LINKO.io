@@ -26,6 +26,13 @@ const app = {
   iceConfigurationMessage: 'A configuração ICE ainda não foi consultada.',
   screenTrack: null,
   screenStream: null,
+  screenShareTransportStream: null,
+  screenSenderTracks: new Map(),
+  screenQualityMode: 'auto',
+  screenStatsTimer: null,
+  screenStatsUpdating: false,
+  screenStatsSamples: new Map(),
+  screenSenderQuality: new Map(),
   turnConfigured: false,
   youtubePlayer: null,
   youtubeApiPromise: null,
@@ -99,7 +106,17 @@ document.querySelector('#app').innerHTML = `
               <select id="video-device" aria-label="Selecionar câmera"><option value="">Câmera padrão</option></select>
             </div>
             <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
+            <label class="screen-quality-picker" for="screen-quality">
+              <span>Qualidade</span>
+              <select id="screen-quality" aria-label="Qualidade do compartilhamento de tela">
+                <option value="auto">Automática</option>
+                <option value="fluid">Fluida (30 FPS)</option>
+                <option value="high">Alta (1080p)</option>
+                <option value="max">Máxima (até 4K / 60 FPS)</option>
+              </select>
+            </label>
           </div>
+          <p class="screen-quality-status hidden" id="screen-quality-status" role="status"></p>
           <p class="network-warning hidden" id="network-warning">A conexão direta falhou. Configure um servidor TURN para alcançar participantes em redes restritas.</p>
           <details class="diagnostics" id="connection-diagnostics">
             <summary>Diagnóstico WebRTC</summary>
@@ -395,7 +412,9 @@ function createPeer(socketId, initiator) {
   for (const track of app.localStream.getAudioTracks()) peer.addTrack(track, app.localStream);
   const cameraTrack = app.localStream.getVideoTracks()[0];
   if (app.screenTrack) {
-    peer.addTrack(app.screenTrack, app.screenStream);
+    peer.addTrack(app.screenTrack, app.screenShareTransportStream);
+    app.screenSenderTracks.set(socketId, app.screenTrack);
+    configureScreenSender(socketId, peer);
   }
   if (cameraTrack) peer.addTrack(cameraTrack, app.localStream);
   peer.on('signal', (signal) => {
@@ -422,12 +441,16 @@ function createPeer(socketId, initiator) {
     updatePeerDiagnostics();
   });
   peer.on('close', () => {
-    if (app.peers.get(socketId) === peer) app.peers.delete(socketId);
+    if (app.peers.get(socketId) === peer) {
+      app.peers.delete(socketId);
+      app.screenSenderTracks.delete(socketId);
+    }
     updatePeerDiagnostics();
   });
   peer.on('error', (error) => {
     if (app.peers.get(socketId) !== peer || !app.isInRoom) return;
     app.peers.delete(socketId);
+    app.screenSenderTracks.delete(socketId);
     const attempt = (app.peerRetryAttempts.get(socketId) || 0) + 1;
     app.peerRetryAttempts.set(socketId, attempt);
     console.debug(`WebRTC peer ${error.code || 'error'}; reconnect attempt ${attempt}/3`);
@@ -452,6 +475,173 @@ function createPeer(socketId, initiator) {
   const pendingSignals = app.pendingSignals.get(socketId) || [];
   app.pendingSignals.delete(socketId);
   for (const signal of pendingSignals) peer.signal(signal);
+}
+
+const screenQualityModes = {
+  auto: { frameRate: 60, contentHint: 'detail' },
+  fluid: { frameRate: 30, contentHint: 'detail' },
+  high: { width: 1920, height: 1080, maxWidth: 1920, maxHeight: 1080, frameRate: 30, contentHint: 'detail' },
+  max: { width: 3840, height: 2160, maxWidth: 3840, maxHeight: 2160, frameRate: 60, contentHint: 'motion' }
+};
+
+function getScreenCaptureConstraints(mode) {
+  const quality = screenQualityModes[mode] || screenQualityModes.auto;
+  const video = {
+    frameRate: { ideal: quality.frameRate, max: quality.frameRate }
+  };
+  if (quality.width) {
+    video.width = { ideal: quality.width, max: quality.maxWidth };
+    video.height = { ideal: quality.height, max: quality.maxHeight };
+  }
+  return {
+    video,
+    audio: false
+  };
+}
+
+function getScreenBitrateCap(mode, settings, participantCount) {
+  const width = settings.width || 1920;
+  const height = settings.height || 1080;
+  const frameRate = settings.frameRate || screenQualityModes[mode]?.frameRate || 30;
+  const pixelCount = width * height;
+  let bitrate;
+  if (mode === 'fluid') bitrate = pixelCount >= 7_000_000 ? 15_000_000 : pixelCount >= 3_000_000 ? 8_000_000 : 4_500_000;
+  else if (mode === 'high') bitrate = 7_500_000;
+  else if (pixelCount >= 7_000_000) bitrate = frameRate > 30 ? 20_000_000 : 15_000_000;
+  else if (pixelCount >= 3_000_000) bitrate = frameRate > 30 ? 15_000_000 : 10_000_000;
+  else bitrate = frameRate > 30 ? 12_000_000 : 7_500_000;
+  return Math.round(Math.min(bitrate, 24_000_000 / Math.max(1, participantCount)));
+}
+
+function getScreenSender(peer) {
+  if (!app.screenTrack) return null;
+  return peer._pc?.getSenders().find((sender) => sender.track?.id === app.screenTrack.id) || null;
+}
+
+function configureScreenSender(socketId, peer, qualityFactor = 1) {
+  const sender = getScreenSender(peer);
+  if (!sender?.getParameters || !sender.setParameters || !app.screenTrack) return;
+  const quality = screenQualityModes[app.screenQualityMode] || screenQualityModes.auto;
+  const settings = app.screenTrack.getSettings();
+  const bitrate = getScreenBitrateCap(app.screenQualityMode, settings, app.peers.size);
+  const parameters = sender.getParameters();
+  if (!parameters.encodings?.length) return;
+  parameters.encodings[0].maxBitrate = Math.round(bitrate * qualityFactor);
+  parameters.encodings[0].maxFramerate = qualityFactor < 1
+    ? Math.min(quality.frameRate, 24)
+    : quality.frameRate;
+  if ('priority' in parameters.encodings[0]) parameters.encodings[0].priority = 'high';
+  if ('degradationPreference' in parameters) parameters.degradationPreference = 'maintain-resolution';
+  sender.setParameters(parameters).catch((error) => {
+    console.warn(`Could not tune screen sender for ${socketId}:`, error.name || 'unknown_error');
+  });
+}
+
+function formatScreenCaptureSettings() {
+  const settings = app.screenTrack?.getSettings();
+  if (!settings) return 'Captura ativa; resolução e FPS reais indisponíveis neste navegador.';
+  const resolution = settings.width && settings.height ? `${settings.width} × ${settings.height}` : 'resolução indisponível';
+  const frameRate = Number.isFinite(settings.frameRate) ? `${Math.round(settings.frameRate)} FPS` : 'FPS indisponível';
+  return `Captura real: ${resolution} · ${frameRate}.`;
+}
+
+async function updateScreenQualityStats() {
+  if (!app.screenTrack || app.screenStatsUpdating) return;
+  app.screenStatsUpdating = true;
+  try {
+    const reports = await Promise.all(Array.from(app.peers, async ([socketId, peer]) => {
+      const sender = getScreenSender(peer);
+      if (!sender?.getStats) return null;
+      try {
+        const [stats, peerStats] = await Promise.all([sender.getStats(), peer._pc.getStats()]);
+        const items = Array.from(stats.values());
+        const allItems = Array.from(peerStats.values());
+        const outbound = items.find((report) => report.type === 'outbound-rtp' && (report.kind === 'video' || report.mediaType === 'video'));
+        if (!outbound) return null;
+        const previous = app.screenStatsSamples.get(socketId);
+        app.screenStatsSamples.set(socketId, {
+          bytesSent: outbound.bytesSent,
+          timestamp: outbound.timestamp,
+          framesDropped: outbound.framesDropped
+        });
+        const elapsed = previous ? (outbound.timestamp - previous.timestamp) / 1000 : 0;
+        const bitrate = previous && elapsed > 0
+          ? Math.max(0, (outbound.bytesSent - previous.bytesSent) * 8 / elapsed)
+          : null;
+        const remoteInbound = items.find((report) => report.type === 'remote-inbound-rtp' && report.localId === outbound.id);
+        const candidatePair = allItems.find((report) => report.type === 'candidate-pair' && (report.selected || report.nominated && report.state === 'succeeded'));
+        const packetLoss = Number.isFinite(remoteInbound?.fractionLost)
+          ? Math.max(0, remoteInbound.fractionLost)
+          : Number.isFinite(remoteInbound?.packetsLost) && Number.isFinite(remoteInbound?.packetsReceived)
+            ? Math.max(0, remoteInbound.packetsLost / Math.max(1, remoteInbound.packetsLost + remoteInbound.packetsReceived))
+            : null;
+        const rtt = Number.isFinite(remoteInbound?.roundTripTime)
+          ? remoteInbound.roundTripTime
+          : Number.isFinite(candidatePair?.currentRoundTripTime)
+            ? candidatePair.currentRoundTripTime
+            : null;
+        const droppedFrames = Number.isFinite(outbound.framesDropped) && Number.isFinite(previous?.framesDropped)
+          ? Math.max(0, outbound.framesDropped - previous.framesDropped)
+          : 0;
+        const adaptation = app.screenSenderQuality.get(socketId) || {
+          factor: 1,
+          stableIntervals: 0,
+          participantCount: app.peers.size
+        };
+        if (adaptation.participantCount !== app.peers.size) {
+          adaptation.participantCount = app.peers.size;
+          configureScreenSender(socketId, peer, adaptation.factor);
+        }
+        const poorConnection = (packetLoss !== null && packetLoss > 0.05)
+          || (rtt !== null && rtt > 0.5)
+          || droppedFrames > 8;
+        if (poorConnection) {
+          adaptation.factor = Math.max(0.4, adaptation.factor * 0.75);
+          adaptation.stableIntervals = 0;
+          configureScreenSender(socketId, peer, adaptation.factor);
+        } else if (packetLoss !== null || rtt !== null) {
+          adaptation.stableIntervals += 1;
+          if (adaptation.stableIntervals >= 3 && adaptation.factor < 1) {
+            adaptation.factor = Math.min(1, adaptation.factor + 0.15);
+            adaptation.stableIntervals = 0;
+            configureScreenSender(socketId, peer, adaptation.factor);
+          }
+        }
+        app.screenSenderQuality.set(socketId, adaptation);
+        return {
+          bitrate,
+          rtt,
+          packetLoss,
+          framesPerSecond: outbound.framesPerSecond,
+          framesDropped: droppedFrames
+        };
+      } catch {
+        return null;
+      }
+    }));
+    const available = reports.filter(Boolean);
+    const totalBitrate = available.reduce((total, report) => total + (report.bitrate || 0), 0);
+    const measuredBitrate = available.length === 0
+      ? app.peers.size
+        ? 'transmissão ainda sendo medida'
+        : 'aguardando participantes para medir a transmissão'
+      : available.some((report) => report.bitrate !== null)
+      ? `${(totalBitrate / 1_000_000).toFixed(1)} Mbps enviados`
+      : 'bitrate ainda sendo medido';
+    const frameRates = available.map((report) => report.framesPerSecond).filter(Number.isFinite);
+    const measuredFps = frameRates.length ? ` · envio ${Math.round(Math.min(...frameRates))} FPS` : '';
+    const losses = available.map((report) => report.packetLoss).filter(Number.isFinite);
+    const measuredLoss = losses.length ? ` · perda ${(Math.max(...losses) * 100).toFixed(1)}%` : '';
+    const rtts = available.map((report) => report.rtt).filter(Number.isFinite);
+    const measuredRtt = rtts.length ? ` · RTT até ${Math.round(Math.max(...rtts) * 1000)} ms` : '';
+    const droppedFrames = available.reduce((total, report) => total + (report.framesDropped || 0), 0);
+    const droppedFramesLabel = available.some((report) => Number.isFinite(report.framesDropped))
+      ? ` · quadros descartados ${droppedFrames}`
+      : '';
+    $('#screen-quality-status').textContent = `${formatScreenCaptureSettings()} ${measuredBitrate}${measuredFps}${measuredLoss}${measuredRtt}${droppedFramesLabel}`;
+  } finally {
+    app.screenStatsUpdating = false;
+  }
 }
 
 function attachPeerDiagnostics(peer) {
@@ -614,6 +804,8 @@ function updateRemoteVideoTile(socketId, preferredTrackId) {
     video.srcObject = new MediaStream([selectedTrack.track]);
     video.play().catch((error) => console.warn('Remote video playback was blocked:', error.message));
   }
+  const screenStreamId = app.remoteScreenStreamIds.get(socketId);
+  tile.classList.toggle('screen-tile', Boolean(screenStreamId && selectedTrack.streamId === screenStreamId));
   updateRemoteVideoState(tile);
 }
 
@@ -622,6 +814,8 @@ function selectRemoteVideoTrack(socketId, trackId) {
   if (!entry) return;
   app.selectedRemoteVideoTracks.set(socketId, trackId);
   const tile = $(`.remote-tile[data-socket-id="${CSS.escape(socketId)}"]`);
+  const screenStreamId = app.remoteScreenStreamIds.get(socketId);
+  tile?.classList.toggle('screen-tile', Boolean(screenStreamId && entry.streamId === screenStreamId));
   const video = tile?.querySelector('video');
   if (!video) return;
   video.srcObject = new MediaStream([entry.track]);
@@ -666,6 +860,7 @@ function removePeer(socketId) {
   }
   const peer = app.peers.get(socketId);
   app.peers.delete(socketId);
+  app.screenSenderTracks.delete(socketId);
   app.pendingSignals.delete(socketId);
   if (peer && !peer.destroyed) peer.destroy();
   app.participants.delete(socketId);
@@ -689,6 +884,7 @@ function closePeers() {
   $('#retry-media').classList.add('hidden');
   for (const peer of app.peers.values()) if (!peer.destroyed) peer.destroy();
   app.peers.clear();
+  app.screenSenderTracks.clear();
   app.pendingSignals.clear();
   app.remoteStreams.clear();
   app.remoteAudioStreams.clear();
@@ -869,6 +1065,14 @@ function fillDevices(select, devices, label) {
 
 navigator.mediaDevices?.addEventListener?.('devicechange', enumerateDevices);
 
+$('#screen-quality').addEventListener('change', (event) => {
+  if (!Object.hasOwn(screenQualityModes, event.target.value)) {
+    event.target.value = app.screenQualityMode;
+    return;
+  }
+  app.screenQualityMode = event.target.value;
+});
+
 $('#screen-button').addEventListener('click', async () => {
   if (app.screenTrack) {
     stopScreenShare();
@@ -879,37 +1083,56 @@ $('#screen-button').addEventListener('click', async () => {
     return;
   }
   try {
-    app.screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: { ideal: 1920, max: 3840 }, height: { ideal: 1080, max: 2160 }, frameRate: { ideal: 30, max: 60 } },
-      audio: false
-    });
+    const quality = screenQualityModes[app.screenQualityMode];
+    app.screenStream = await navigator.mediaDevices.getDisplayMedia(getScreenCaptureConstraints(app.screenQualityMode));
     app.screenTrack = app.screenStream.getVideoTracks()[0];
     if (!app.screenTrack) throw new Error('Não foi possível iniciar a captura da tela.');
-    app.screenTrack.contentHint = 'detail';
-    await publishScreenState(app.screenStream.id);
-    for (const peer of app.peers.values()) {
+    if (!app.screenShareTransportStream) app.screenShareTransportStream = new MediaStream();
+    app.screenShareTransportStream.addTrack(app.screenTrack);
+    app.screenTrack.contentHint = quality.contentHint;
+    await publishScreenState(app.screenShareTransportStream.id);
+    for (const [socketId, peer] of app.peers) {
       if (peer.destroyed) continue;
-      peer.addTrack(app.screenTrack, app.screenStream);
+      const previousTrack = app.screenSenderTracks.get(socketId);
+      if (previousTrack) {
+        peer.replaceTrack(previousTrack, app.screenTrack, app.screenShareTransportStream);
+      } else {
+        peer.addTrack(app.screenTrack, app.screenShareTransportStream);
+      }
+      app.screenSenderTracks.set(socketId, app.screenTrack);
+      configureScreenSender(socketId, peer);
     }
     $('#local-video').srcObject = app.screenStream;
+    $('#self-tile').classList.add('screen-tile');
+    $('#screen-quality').disabled = true;
     $('#local-empty').classList.add('hidden');
     $('#screen-button').textContent = 'Parar compartilhamento';
     $('#screen-button').classList.add('selected');
     $('#screen-button').setAttribute('aria-pressed', 'true');
+    $('#screen-quality-status').classList.remove('hidden');
+    $('#screen-quality-status').textContent = `${formatScreenCaptureSettings()} Medindo transmissão…`;
+    app.screenStatsSamples.clear();
+    app.screenSenderQuality.clear();
+    updateScreenQualityStats();
+    app.screenStatsTimer = window.setInterval(updateScreenQualityStats, 3000);
     app.screenTrack.addEventListener('ended', stopScreenShare, { once: true });
   } catch (error) {
     if (app.screenStream) {
-      for (const peer of app.peers.values()) {
-        if (!app.screenTrack || peer.destroyed) continue;
+      for (const [socketId, peer] of app.peers) {
+        if (!app.screenTrack || peer.destroyed || app.screenSenderTracks.get(socketId) !== app.screenTrack) continue;
         try {
-          peer.removeTrack(app.screenTrack, app.screenStream);
+          peer.replaceTrack(app.screenTrack, null, app.screenShareTransportStream);
         } catch (removeError) {
           console.warn('Could not roll back the shared screen from a peer:', removeError.message);
         }
       }
+      app.screenShareTransportStream?.removeTrack(app.screenTrack);
       for (const track of app.screenStream.getTracks()) track.stop();
       app.screenStream = null;
       app.screenTrack = null;
+      $('#screen-quality').disabled = false;
+      $('#screen-quality-status').classList.add('hidden');
+      $('#self-tile').classList.remove('screen-tile');
       publishScreenState(null).catch((stateError) => console.warn('Could not clear screen share state:', stateError.message));
     }
     if (error.name !== 'NotAllowedError') {
@@ -926,24 +1149,33 @@ async function publishScreenState(screenStreamId) {
 
 function stopScreenShare() {
   if (!app.screenTrack) return;
+  clearInterval(app.screenStatsTimer);
+  app.screenStatsTimer = null;
+  app.screenStatsSamples.clear();
+  app.screenSenderQuality.clear();
   const screenTrack = app.screenTrack;
-  for (const peer of app.peers.values()) {
-    if (app.screenStream) {
+  for (const [socketId, peer] of app.peers) {
+    const senderTrack = app.screenSenderTracks.get(socketId);
+    if (app.screenShareTransportStream && senderTrack) {
       try {
-        peer.removeTrack(screenTrack, app.screenStream);
+        peer.replaceTrack(senderTrack, null, app.screenShareTransportStream);
       } catch (error) {
-        console.warn('Could not remove the shared screen from a peer:', error.message);
+        console.warn('Could not stop the shared screen for a peer:', error.message);
       }
     }
   }
   publishScreenState(null).catch((error) => console.warn('Could not clear screen share state:', error.message));
   screenTrack.stop();
+  app.screenShareTransportStream?.removeTrack(screenTrack);
   app.screenStream = null;
   app.screenTrack = null;
   $('#local-video').srcObject = app.localStream;
+  $('#self-tile').classList.remove('screen-tile');
   $('#screen-button').textContent = 'Compartilhar tela';
   $('#screen-button').classList.remove('selected');
   $('#screen-button').setAttribute('aria-pressed', 'false');
+  $('#screen-quality').disabled = false;
+  $('#screen-quality-status').classList.add('hidden');
   $('#local-empty').classList.toggle('hidden', hasActiveLocalVideo());
 }
 
