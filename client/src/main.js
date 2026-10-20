@@ -126,7 +126,13 @@ document.querySelector('#app').innerHTML = `
           <button class="button control retry-media hidden" id="retry-media" type="button">Tentar reconectar</button>
         </section>
         <aside class="youtube card">
-          <div class="youtube-heading"><div><span class="eyebrow">ASSISTAM JUNTOS</span><h2>YouTube</h2></div><span class="youtube-mark">▶</span></div>
+          <div class="youtube-heading">
+            <div><span class="eyebrow">ASSISTAM JUNTOS</span><h2>YouTube</h2></div>
+            <div class="youtube-actions">
+              <button class="button control youtube-stop hidden" id="youtube-stop" type="button">Tirar vídeo</button>
+              <span class="youtube-mark">▶</span>
+            </div>
+          </div>
           <form class="youtube-form" id="youtube-form">
             <label for="youtube-url">Link do vídeo</label>
             <div><input id="youtube-url" type="url" placeholder="Cole um link do YouTube" /><button class="button primary" type="submit">Assistir</button></div>
@@ -134,6 +140,13 @@ document.querySelector('#app').innerHTML = `
           <div class="player-frame"><div id="youtube-player"></div><p id="youtube-placeholder">Cole um link para começar um vídeo com a sala.</p></div>
           <p class="youtube-note">Reprodução e busca sincronizadas entre participantes.</p>
         </aside>
+      </div>
+      <div class="star-cta">
+        <span>Curtiu o LINKO.IO? Uma estrela no GitHub ajuda muito!</span>
+        <a href="https://github.com/Adrianppety/LINKO.io" target="_blank" rel="noopener noreferrer" aria-label="Abrir repositório LINKO.IO no GitHub e deixar uma estrela">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></svg>
+          Deixar uma estrela
+        </a>
       </div>
       <div class="toast hidden" id="toast" role="status"></div>
     </section>
@@ -1190,12 +1203,26 @@ $('#youtube-form').addEventListener('submit', async (event) => {
     await ensureYoutubeApi();
     app.youtubePlayer.loadVideoById(videoId);
     $('#youtube-placeholder').classList.add('hidden');
+    $('#youtube-stop').classList.remove('hidden');
     publishYoutube('load', videoId, 0);
   } catch (error) {
     console.error('YouTube IFrame API error:', error);
     showToast('Não foi possível carregar o player oficial do YouTube.');
   }
 });
+
+$('#youtube-stop').addEventListener('click', stopYoutube);
+
+function stopYoutube() {
+  app.youtubeSuppressUntil = Date.now() + 2000;
+  app.youtubePlayer?.stopVideo();
+  app.youtubeState = { action: 'stop', videoId: null, currentTime: 0, updatedAt: Date.now() };
+  app.lastYoutubeSample = null;
+  $('#youtube-url').value = '';
+  $('#youtube-placeholder').classList.remove('hidden');
+  $('#youtube-stop').classList.add('hidden');
+  publishYoutube('stop', null, 0);
+}
 
 function extractYoutubeId(value) {
   try {
@@ -1263,8 +1290,8 @@ function publishYoutube(action, videoId, currentTime) {
   const player = app.youtubePlayer;
   const state = {
     action,
-    videoId: videoId || app.youtubeState?.videoId || null,
-    currentTime: Number.isFinite(currentTime) ? currentTime : (player?.getCurrentTime?.() || 0)
+    videoId: action === 'stop' ? null : (videoId || app.youtubeState?.videoId || null),
+    currentTime: action === 'stop' ? 0 : (Number.isFinite(currentTime) ? currentTime : (player?.getCurrentTime?.() || 0))
   };
   app.youtubeState = { ...state, updatedAt: Date.now() };
   socket.emit('youtube-control', state);
@@ -1273,8 +1300,12 @@ function publishYoutube(action, videoId, currentTime) {
 async function applyYoutubeState(state) {
   if (!state?.videoId) {
     if (state?.action === 'stop') {
+      app.youtubeSuppressUntil = Date.now() + 2000;
       app.youtubePlayer?.stopVideo();
+      app.lastYoutubeSample = null;
+      $('#youtube-url').value = '';
       $('#youtube-placeholder').classList.remove('hidden');
+      $('#youtube-stop').classList.add('hidden');
     }
     app.youtubeState = state;
     return;
@@ -1282,6 +1313,7 @@ async function applyYoutubeState(state) {
   app.youtubeState = state;
   $('#youtube-url').value = `https://youtu.be/${state.videoId}`;
   $('#youtube-placeholder').classList.add('hidden');
+  $('#youtube-stop').classList.remove('hidden');
   try {
     await ensureYoutubeApi();
     const player = app.youtubePlayer;
