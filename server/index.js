@@ -1,193 +1,162 @@
+const crypto = require('node:crypto');
 const express = require('express');
-const http = require('http');
+const http = require('node:http');
 const path = require('node:path');
-const socketIo = require('socket.io');
+const { Server } = require('socket.io');
+const { RoomRegistry, normalizeNickname } = require('./rooms');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
-const { SettingsStore, createReportsRouter } = require('./settingsStore');
-const { AuthService, createAuthRouter } = require('./auth');
-const { createEmailService } = require('./emailService');
 
 const app = express();
+const server = http.createServer(app);
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const io = new Server(server, {
+  cors: { origin: allowedOrigins, methods: ['GET', 'POST'] },
+  maxHttpBufferSize: 100_000,
+  pingInterval: 25_000,
+  pingTimeout: 20_000
+});
+const rooms = new RoomRegistry();
 
-// Only create HTTP server and Socket.io if not in Vercel (serverless environment)
-const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV !== undefined;
-let server;
-let io;
+app.use((request, response, next) => {
+  const origin = request.get('origin');
+  if (origin && !allowedOrigins.includes(origin)) return response.status(403).json({ error: 'origin_not_allowed' });
+  if (origin) {
+    response.set('Access-Control-Allow-Origin', origin);
+    response.set('Vary', 'Origin');
+    response.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    response.set('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (request.method === 'OPTIONS') return response.sendStatus(204);
+  next();
+});
 
-if (process.env.RENDER === 'true') {
-  const requiredEnvironment = ['NODE_ENV', 'LINKO_DATABASE_PATH', 'LINKO_FILES_PATH', 'APP_BASE_URL', 'ALLOWED_ORIGINS'];
-  const missingEnvironment = requiredEnvironment.filter(name => !process.env[name]?.trim());
-  if (missingEnvironment.length) {
-    throw new Error(`Configure no Render as variáveis obrigatórias: ${missingEnvironment.join(', ')}.`);
+app.get('/health', (_request, response) => response.json({ status: 'ok' }));
+app.get('/api/ice-servers', (_request, response) => {
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const turnUrls = (process.env.TURN_URLS || '').split(',').map((url) => url.trim()).filter(Boolean);
+  const turnSecret = process.env.TURN_SHARED_SECRET;
+  if (turnUrls.length && !turnSecret) return response.status(503).json({ error: 'turn_shared_secret_required' });
+  if (turnUrls.length) {
+    const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60;
+    const username = `${expiresAt}:linko`;
+    const credential = crypto.createHmac('sha1', turnSecret).update(username).digest('base64');
+    iceServers.push({ urls: turnUrls, username, credential });
   }
-  if (process.env.NODE_ENV !== 'production') {
-    throw new Error('Configure NODE_ENV=production no Render para habilitar cookies seguros.');
-  }
-  for (const name of ['LINKO_DATABASE_PATH', 'LINKO_FILES_PATH']) {
-    if (!path.isAbsolute(process.env[name])) {
-      throw new Error(`${name} deve ser um caminho absoluto no disco persistente do Render.`);
+  response.json({ iceServers, turnConfigured: turnUrls.length > 0 });
+});
+
+const roomExpiry = setInterval(() => rooms.prune(), 60_000);
+roomExpiry.unref();
+
+io.on('connection', (socket) => {
+  socket.on('create-room', (payload = {}, acknowledge) => {
+    if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Pedido inválido.' });
+    const nickname = normalizeNickname(payload.nickname);
+    if (!nickname) return reply(acknowledge, { ok: false, message: 'Informe um apelido de até 20 caracteres.' });
+    if (rooms.getParticipant(socket.id)) {
+      return reply(acknowledge, { ok: false, message: 'Saia da sala atual antes de criar outra.' });
     }
-  }
-}
-
-const databasePath = process.env.LINKO_DATABASE_PATH ? path.resolve(__dirname, process.env.LINKO_DATABASE_PATH) : path.join(__dirname, 'data', 'linko.sqlite');
-const filesDirectory = process.env.LINKO_FILES_PATH ? path.resolve(__dirname, process.env.LINKO_FILES_PATH) : path.join(__dirname, 'data', 'files');
-const settingsStore = new SettingsStore(databasePath);
-const authService = new AuthService({ store: settingsStore, mailer: createEmailService(), filesDirectory });
-
-if (!isVercel) {
-  server = http.createServer(app);
-  io = socketIo(server, {
-    cors: {
-      origin: [...authService.allowedOrigins],
-      credentials: true,
-      methods: ['GET', 'POST']
-    }
+    const result = rooms.create(socket.id, nickname);
+    socket.join(result.roomId);
+    reply(acknowledge, roomResponse(result, socket.id));
   });
 
-  io.engine.generateId = (req) => {
-    return authService.getSocketUser(req.headers.cookie) ? authService.getSocketUser(req.headers.cookie).id : req.id || '';
+  socket.on('join-room', (payload = {}, acknowledge) => {
+    if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Pedido inválido.' });
+    const nickname = normalizeNickname(payload.nickname);
+    if (!nickname) return reply(acknowledge, { ok: false, message: 'Informe um apelido de até 20 caracteres.' });
+    const result = rooms.join(payload.roomId, socket.id, nickname);
+    if (!result.ok) return reply(acknowledge, { ok: false, message: result.message });
+    socket.join(result.roomId);
+    if (!result.alreadyJoined) {
+      socket.to(result.roomId).emit('user-connected', { socketId: socket.id, nickname });
+    }
+    reply(acknowledge, roomResponse(result, socket.id));
+  });
+
+  socket.on('leave-room', () => leaveRoom(socket));
+  socket.on('signal', (payload = {}, acknowledge) => {
+    if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Sinalização inválida.' });
+    const source = rooms.getParticipant(socket.id);
+    const target = rooms.getParticipant(payload.targetSocketId);
+    const signal = payload.signal;
+    if (!source || !target || source.roomId !== target.roomId || !isValidSignal(signal)) {
+      return reply(acknowledge, { ok: false, message: 'Sinalização inválida.' });
+    }
+    io.to(payload.targetSocketId).emit('signal', { from: socket.id, signal });
+    reply(acknowledge, { ok: true });
+  });
+
+  socket.on('youtube-control', (payload = {}, acknowledge) => {
+    if (!isRecord(payload)) return reply(acknowledge, { ok: false, message: 'Comando de vídeo inválido.' });
+    const participant = rooms.getParticipant(socket.id);
+    const state = validateYoutubeControl(payload);
+    if (!participant || !state) return reply(acknowledge, { ok: false, message: 'Comando de vídeo inválido.' });
+    const room = rooms.getRoom(participant.roomId);
+    room.youtubeState = { ...state, updatedAt: Date.now() };
+    socket.to(participant.roomId).emit('youtube-control', room.youtubeState);
+    reply(acknowledge, { ok: true });
+  });
+
+  socket.on('disconnect', () => leaveRoom(socket));
+});
+
+function roomResponse(result, socketId) {
+  const room = rooms.getRoom(result.roomId);
+  return {
+    ok: true,
+    roomId: result.roomId,
+    participants: Array.from(room.participants, ([id, nickname]) => ({ socketId: id, nickname }))
+      .filter((participant) => participant.socketId !== socketId),
+    youtubeState: room.youtubeState
   };
 }
 
-// Middleware - only apply static serving in non-Vercel environments to avoid conflict with Vercel static build
-if (!isVercel) {
-  app.use(express.static(path.join(__dirname, '../client/public')));
-  app.use(express.static(path.join(__dirname, '../client')));
+function leaveRoom(socket) {
+  const result = rooms.leave(socket.id);
+  if (!result) return;
+  socket.to(result.roomId).emit('user-disconnected', { socketId: socket.id, nickname: result.nickname });
+  socket.leave(result.roomId);
 }
 
-app.use(express.json({ limit: '2mb' }));
-app.use('/api', createAuthRouter(authService, { io }));
-app.use('/api/reports', createReportsRouter(settingsStore, {}, authService));
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Socket.io connection handling (only in non-Vercel environments)
-if (!isVercel && io) {
-  // Store active rooms and users
-  const rooms = new Map();
-
-  io.use((socket, next) => {
-    const origin = socket.handshake.headers.origin;
-    if (origin && origin !== 'null' && !authService.allowedOrigins.has(origin)) {
-      return next(new Error('origin_denied'));
-    }
-    const user = authService.getSocketUser(socket.handshake.headers.cookie);
-    if (!user) return next(new Error('session_required'));
-    socket.data.user = { id: user.id, nickname: user.nickname, displayName: user.display_name };
-    return next();
-  });
-
-  io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
-
-    socket.join(`user:${socket.data.user.id}`);
-    socket.on('leave-room', (conversationId) => {
-      if (typeof conversationId !== 'string' || !socket.rooms.has(conversationId)) return;
-      socket.leave(conversationId);
-      const roomUsers = rooms.get(conversationId);
-      roomUsers?.delete(socket.id);
-      socket.to(conversationId).emit('user-disconnected', socket.id);
-      if (roomUsers?.size === 0) rooms.delete(conversationId);
-    });
-
-    socket.on('join-room', (conversationId) => {
-      if (typeof conversationId !== 'string' || !authService.isConversationMember(conversationId, socket.data.user.id)) {
-        socket.emit('room-error', { code: 'conversation_forbidden' });
-        return;
-      }
-      socket.join(conversationId);
-
-      if (!rooms.has(conversationId)) {
-        rooms.set(conversationId, new Set());
-      }
-
-      const roomUsers = rooms.get(conversationId);
-      roomUsers.add(socket.id);
-
-      socket.to(conversationId).emit('user-connected', socket.data.user.nickname, socket.id);
-
-      const existingUsers = Array.from(roomUsers).filter(id => id !== socket.id).map(id => {
-        const peer = io.sockets.sockets.get(id);
-        return peer ? { id: peer.data.user.id, nickname: peer.data.user.nickname, socketId: id } : null;
-      }).filter(Boolean);
-      socket.emit('room-users', existingUsers);
-
-      console.log(`User ${socket.data.user.nickname} joined conversation ${conversationId}`);
-    });
-
-    socket.on('offer', (conversationId, offer) => {
-      if (!socket.rooms.has(conversationId)) return;
-      socket.to(conversationId).emit('offer', offer, socket.id, socket.id);
-    });
-
-    socket.on('answer', (conversationId, answer, _clientSender, targetSocketId) => {
-      if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
-      io.to(targetSocketId).emit('answer', answer, socket.id, socket.id);
-    });
-
-    socket.on('ice-candidate', (conversationId, candidate, _clientSender, targetSocketId) => {
-      if (!socket.rooms.has(conversationId) || !rooms.get(conversationId)?.has(targetSocketId)) return;
-      io.to(targetSocketId).emit('ice-candidate', candidate, socket.id, socket.id);
-    });
-
-    socket.on('input-event', (conversationId, eventData) => {
-      if (!socket.rooms.has(conversationId) || !eventData || typeof eventData !== 'object') return;
-      socket.to(conversationId).emit('input-event', eventData, socket.data.user.nickname);
-    });
-
-    // Handle user leaving
-    socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id);
-
-      // Remove user from all rooms
-      rooms.forEach((userSet, roomId) => {
-        if (userSet.has(socket.id)) {
-          userSet.delete(socket.id);
-          // Notify others in the room
-          socket.to(roomId).emit('user-disconnected', socket.id);
-
-          // Clean up empty rooms
-          if (userSet.size === 0) {
-            rooms.delete(roomId);
-          }
-        }
-      });
-    });
-
-    socket.on('chat-message', (conversationId, message) => {
-      if (!socket.rooms.has(conversationId) || typeof message !== 'string') return;
-      const content = message.trim();
-      if (!content || content.length > 5000) return;
-      const id = require('node:crypto').randomUUID();
-      const createdAt = new Date().toISOString();
-      try {
-        authService.db.prepare('INSERT INTO messages (id,conversation_id,sender_user_id,content,created_at) VALUES (?,?,?,?,?)')
-          .run(id,conversationId,socket.data.user.id,content,createdAt);
-        io.to(conversationId).emit('chat-message', content, socket.data.user.nickname, { id, createdAt });
-      } catch (error) {
-        console.error('Message persistence failed:', error.message);
-        socket.emit('message-error', { code: 'message_unavailable' });
-      }
-    });
-  });
+function validateYoutubeControl(payload) {
+  if (!isRecord(payload)) return null;
+  const allowedActions = new Set(['load', 'play', 'pause', 'seek', 'stop']);
+  if (!allowedActions.has(payload.action)) return null;
+  if (payload.action !== 'stop' && !/^[A-Za-z0-9_-]{11}$/.test(payload.videoId || '')) return null;
+  const currentTime = Number(payload.currentTime);
+  if (!Number.isFinite(currentTime) || currentTime < 0 || currentTime > 86_400) return null;
+  return {
+    action: payload.action,
+    videoId: payload.action === 'stop' ? null : payload.videoId,
+    currentTime
+  };
 }
 
-// Start server only in non-Vercel environments
-if (!isVercel && server) {
-  const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => {
-    console.log(`Signaling server running on port ${PORT}`);
-  });
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// Export app for Vercel serverless functions
-module.exports = app;
+function isValidSignal(signal) {
+  if (!signal || typeof signal !== 'object' || Array.isArray(signal)) return false;
+  if (signal.type && !['offer', 'answer', 'candidate', 'renegotiate'].includes(signal.type)) return false;
+  try {
+    return Buffer.byteLength(JSON.stringify(signal)) <= 64_000;
+  } catch {
+    return false;
+  }
+}
 
-// For backward compatibility, also export io and authService if needed
-module.exports.io = io;
-module.exports.authService = authService;
-module.exports.settingsStore = settingsStore;
+function reply(acknowledge, response) {
+  if (typeof acknowledge === 'function') acknowledge(response);
+}
+
+if (require.main === module) {
+  const port = Number(process.env.PORT) || 3000;
+  server.listen(port, () => console.log(`Linko signaling server listening on port ${port}`));
+}
+
+module.exports = { app, io, rooms, server };

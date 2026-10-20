@@ -17,10 +17,13 @@ if (process.env.VERCEL === '1' && !backendUrl) {
 }
 
 export default defineConfig({
-  plugins: [{
-    name: 'linko-backend-url',
-    transformIndexHtml(html) {
-      return html.replace('"__LINKO_API_URL__"', JSON.stringify(backendUrl))
-    }
-  }]
+  define: {
+    global: 'globalThis'
+  },
+  resolve: {
+    alias: { events: 'events/' }
+  },
+  server: {
+    host: '0.0.0.0'
+  }
 })

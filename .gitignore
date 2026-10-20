@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+!.env.example
+client/dist/
+server/cookies.txt
+server/server.log
+server/index.js.bak

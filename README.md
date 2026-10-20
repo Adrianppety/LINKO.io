@@ -1,45 +1,33 @@
-https://linkoio-bice.vercel.app# LINKO.io
+# Linko
 
-## Implantação
+Salas temporárias de voz, vídeo, compartilhamento de tela e YouTube, com temas claro, escuro e gamer. Não há contas, perfis ou mensagens. O apelido só é usado durante a conexão; a preferência visual fica neste navegador.
 
-O cliente web é implantado na Vercel e a API/servidor de sinalização Express roda separadamente no Render. A compilação da Vercel não implanta `server/`.
+## Desenvolvimento
 
-### Backend no Render
-
-Crie um Web Service no Render com o diretório raiz definido como `server/`, runtime Node.js e comando de início `npm start`. O Render fornece `PORT`, que o servidor já utiliza.
-
-Anexe um disco persistente ao serviço Render e monte-o em `/var/data`. Configure:
-
-```text
-LINKO_DATABASE_PATH=/var/data/linko.sqlite
-LINKO_FILES_PATH=/var/data/files
-APP_BASE_URL=https://<seu-dominio-vercel>
-ALLOWED_ORIGINS=https://<seu-dominio-vercel>
-NODE_ENV=production
+```powershell
+npm install
+npm install --prefix client
+npm install --prefix server
+npm run dev
 ```
 
-O servidor falha na inicialização no Render se essas variáveis estiverem ausentes ou se os caminhos do banco/arquivos não forem absolutos, em vez de iniciar silenciosamente usando o armazenamento efêmero do código.
+O cliente Vite abre em `http://localhost:5173`; o servidor Socket.IO usa `http://localhost:3000`. Para testar mídia, use um navegador com permissões de câmera/microfone e uma origem segura (HTTPS ou localhost). O site pede cada permissão apenas quando o respectivo recurso é ativado.
 
-O cadastro cria a conta e inicia a sessão imediatamente, sem enviar código de confirmação. Adicione as configurações SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` e `SMTP_FROM`) no Render para habilitar a recuperação de senha. Como o e-mail não é verificado, use um endereço válido e acessível. Mantenha o serviço Render em uma instância ao usar um único disco persistente e salas Socket.IO em memória; escalar para várias instâncias exige estado compartilhado para sockets e armazenamento.
+Testes do servidor e build do cliente:
 
-Sem o disco persistente, o banco SQLite e as imagens de perfil enviadas podem ser perdidos ao reiniciar ou reimplantar. Use a origem exata do site Vercel em `APP_BASE_URL` e `ALLOWED_ORIGINS`. Se os deploys Preview da Vercel devem acessar o mesmo backend, adicione cada origem Preview permitida em `ALLOWED_ORIGINS`.
-
-O banco local `server/data/linko.sqlite` é ignorado pelo Git e não será enviado ao Render. Para preservar os dados locais, será necessário importá-lo separadamente para o disco persistente do serviço; não o adicione ao repositório.
-
-### Frontend na Vercel
-
-Importe o repositório como projeto Vercel usando o diretório raiz. O [`vercel.json`](./vercel.json) na raiz instala e compila apenas `client/` e serve o resultado Vite como SPA.
-
-Configure esta variável de ambiente no projeto Vercel para cada ambiente que deve funcionar:
-
-```text
-VITE_API_URL=https://<nome-do-servico>.onrender.com
+```powershell
+npm test --prefix server
+npm run build
+npm run lint --prefix client
 ```
 
-Use somente a origem do backend (sem o sufixo `/api` ou outro caminho). O valor é incorporado à compilação estática e também é usado pelo Socket.IO. A compilação Vercel falha intencionalmente se a variável não estiver configurada ou não usar HTTPS.
+## Deploy
 
-Como a autenticação usa cookies, configure preferencialmente domínios próprios sob o mesmo domínio registrável para o frontend e a API (por exemplo, `app.exemplo.com` e `api.exemplo.com`). Os domínios padrão `vercel.app` e `onrender.com` são sites distintos e alguns navegadores podem bloquear cookies de terceiros mesmo com `SameSite=None`.
+- Publique o diretório `client/` na Vercel. Configure `VITE_API_URL` com a origem HTTPS do servidor de sinalização.
+- Publique `server/` como um serviço Node que mantenha WebSockets ativos (por exemplo, Render). Configure `ALLOWED_ORIGINS` com a origem exata do site.
+- O serviço de sinalização usa estado temporário em memória. Mantenha uma instância; reinícios encerram as salas e múltiplas instâncias exigiriam um adaptador compartilhado.
+- Para atravessar redes que bloqueiam conexões P2P, configure um servidor TURN compatível com credenciais REST do coturn: `TURN_URLS` e `TURN_SHARED_SECRET` somente no backend. Sem TURN, STUN é usado como alternativa e algumas redes podem impedir a chamada.
 
-### Desenvolvimento local
+O WebRTC é P2P em malha para até 10 participantes, sem SFU. É simples de operar e não requer credenciais de provedor, mas o envio de vídeo cresce com o número de participantes. Para uso frequente de salas cheias ou qualidade consistente em redes móveis, será necessário hospedar um SFU (por exemplo, LiveKit ou mediasoup) e trocar a malha por publicação/assinatura centralizadas. O navegador ajusta a mídia conforme a conexão; compartilhamento de tela prioriza legibilidade.
 
-Execute `npm run dev` na raiz do repositório. Por padrão, o cliente usa `http://localhost:3000` para a API e o servidor de sinalização; defina `VITE_API_URL` apenas ao usar outro backend.
+Os links usam identificadores aleatórios de alta entropia, mas são convites: qualquer pessoa com o link pode entrar enquanto a sala existir. Salas vazias expiram após cinco minutos.
