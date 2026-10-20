@@ -14,6 +14,8 @@ const app = {
   peerRetryTimers: new Map(),
   failedPeerIds: new Set(),
   pendingSignals: new Map(),
+  diagnosticsTimer: null,
+  diagnosticsUpdating: false,
   participants: new Map(),
   remoteStreams: new Map(),
   remoteAudioStreams: new Map(),
@@ -21,6 +23,7 @@ const app = {
   remoteScreenStreamIds: new Map(),
   selectedRemoteVideoTracks: new Map(),
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  iceConfigurationMessage: 'A configuração ICE ainda não foi consultada.',
   screenTrack: null,
   screenStream: null,
   turnConfigured: false,
@@ -98,6 +101,11 @@ document.querySelector('#app').innerHTML = `
             <button class="button control" id="screen-button" type="button" aria-pressed="false">Compartilhar tela</button>
           </div>
           <p class="network-warning hidden" id="network-warning">A conexão direta falhou. Configure um servidor TURN para alcançar participantes em redes restritas.</p>
+          <details class="diagnostics" id="connection-diagnostics">
+            <summary>Diagnóstico WebRTC</summary>
+            <p id="ice-configuration-status"></p>
+            <ul id="peer-diagnostics"><li>Aguardando conexões com participantes.</li></ul>
+          </details>
           <button class="button control retry-media hidden" id="retry-media" type="button">Tentar reconectar</button>
         </section>
         <aside class="youtube card">
@@ -218,7 +226,11 @@ socket.on('signal', ({ from, signal }) => {
   const peer = app.peers.get(from);
   if (!app.isInRoom || !from || !signal) return;
   if (peer) {
-    peer.signal(signal);
+    try {
+      peer.signal(signal);
+    } catch (error) {
+      console.warn('WebRTC signal could not be applied:', error.code || 'invalid_signal');
+    }
     return;
   }
   const pending = app.pendingSignals.get(from) || [];
@@ -377,7 +389,7 @@ function createPeer(socketId, initiator) {
   const peer = new SimplePeer({
     initiator,
     trickle: true,
-    config: { iceServers: app.iceServers }
+    config: { iceServers: app.iceServers, iceTransportPolicy: 'all' }
   });
   app.peers.set(socketId, peer);
   for (const track of app.localStream.getAudioTracks()) peer.addTrack(track, app.localStream);
@@ -395,6 +407,7 @@ function createPeer(socketId, initiator) {
     });
   });
   peer.on('track', (track, stream) => attachRemoteTrack(socketId, track, stream));
+  attachPeerDiagnostics(peer);
   peer.on('connect', () => {
     clearTimeout(app.peerRetryTimers.get(socketId));
     app.peerRetryTimers.delete(socketId);
@@ -403,13 +416,14 @@ function createPeer(socketId, initiator) {
     const hasFailedPeers = app.failedPeerIds.size > 0;
     $('#retry-media').classList.toggle('hidden', !hasFailedPeers);
     if (!hasFailedPeers) {
-      $('#network-warning').textContent = 'TURN não configurado: redes restritas podem impedir a conexão de áudio e vídeo.';
       $('#network-warning').classList.toggle('hidden', app.turnConfigured);
     }
     setConnection(true, 'Conectado à sala');
+    updatePeerDiagnostics();
   });
   peer.on('close', () => {
     if (app.peers.get(socketId) === peer) app.peers.delete(socketId);
+    updatePeerDiagnostics();
   });
   peer.on('error', (error) => {
     if (app.peers.get(socketId) !== peer || !app.isInRoom) return;
@@ -430,13 +444,100 @@ function createPeer(socketId, initiator) {
     }
     app.failedPeerIds.add(socketId);
     setConnection(false, 'Sem conexão de vídeo — confira a rede');
-    $('#network-warning').textContent = 'Não foi possível conectar este participante. A rede pode exigir TURN; configure TURN_URLS e TURN_SHARED_SECRET no servidor.';
+    $('#network-warning').textContent = peerFailureMessage();
     $('#network-warning').classList.remove('hidden');
     $('#retry-media').classList.remove('hidden');
+    updatePeerDiagnostics();
   });
   const pendingSignals = app.pendingSignals.get(socketId) || [];
   app.pendingSignals.delete(socketId);
   for (const signal of pendingSignals) peer.signal(signal);
+}
+
+function attachPeerDiagnostics(peer) {
+  // simple-peer keeps its RTCPeerConnection on this instance for browser diagnostics.
+  const peerConnection = peer._pc;
+  if (!peerConnection) return;
+  peerConnection.addEventListener?.('iceconnectionstatechange', updatePeerDiagnostics);
+  peerConnection.addEventListener?.('connectionstatechange', updatePeerDiagnostics);
+}
+
+async function updatePeerDiagnostics() {
+  const list = $('#peer-diagnostics');
+  if (!list || app.diagnosticsUpdating) return;
+  app.diagnosticsUpdating = true;
+  try {
+    const entries = await Promise.all(Array.from(app.peers, async ([socketId, peer]) => {
+      const peerConnection = peer._pc;
+      const nickname = app.participants.get(socketId) || 'Participante';
+      if (!peerConnection) return { nickname, status: 'Diagnóstico WebRTC indisponível.' };
+      const iceState = peerConnection.iceConnectionState || 'indisponível';
+      const connectionState = peerConnection.connectionState || 'indisponível';
+      let selectedRoute = 'Candidato selecionado ainda não disponível.';
+      try {
+        const stats = await peerConnection.getStats();
+        const reports = Array.from(stats.values());
+        const transport = reports.find((report) => report.type === 'transport' && report.selectedCandidatePairId);
+        const pair = transport
+          ? stats.get(transport.selectedCandidatePairId)
+          : reports.find((report) => report.type === 'candidate-pair' && (
+            report.selected === true || (report.nominated === true && report.state === 'succeeded')
+          ));
+        if (pair) {
+          const localCandidate = stats.get(pair.localCandidateId);
+          const remoteCandidate = stats.get(pair.remoteCandidateId);
+          const candidateTypes = [localCandidate?.candidateType, remoteCandidate?.candidateType].filter(Boolean);
+          selectedRoute = candidateTypes.includes('relay')
+            ? 'TURN relay confirmado'
+            : candidateTypes.length
+              ? `Conexão direta (${candidateTypes.join(' ↔ ')})`
+              : 'Par ICE selecionado; tipo de candidato indisponível.';
+        }
+      } catch {
+        selectedRoute = 'Não foi possível ler as estatísticas ICE.';
+      }
+      return { nickname, status: `ICE: ${iceState} · conexão: ${connectionState} · ${selectedRoute}` };
+    }));
+
+    const fragment = document.createDocumentFragment();
+    if (entries.length === 0) {
+      const item = document.createElement('li');
+      item.textContent = 'Aguardando conexões com participantes.';
+      fragment.append(item);
+    } else {
+      for (const entry of entries) {
+        const item = document.createElement('li');
+        const name = document.createElement('strong');
+        name.textContent = entry.nickname;
+        const status = document.createElement('span');
+        status.textContent = entry.status;
+        item.append(name, status);
+        fragment.append(item);
+      }
+    }
+    list.replaceChildren(fragment);
+  } finally {
+    app.diagnosticsUpdating = false;
+  }
+}
+
+$('#connection-diagnostics').addEventListener('toggle', (event) => {
+  clearInterval(app.diagnosticsTimer);
+  app.diagnosticsTimer = null;
+  if (event.currentTarget.open) {
+    updatePeerDiagnostics();
+    app.diagnosticsTimer = window.setInterval(updatePeerDiagnostics, 3000);
+  }
+});
+
+function peerFailureMessage() {
+  if (app.iceConfigurationMessage.startsWith('Erro:')) {
+    return `${app.iceConfigurationMessage} A conexão direta também falhou; confira a configuração TURN no Render.`;
+  }
+  if (!app.turnConfigured) {
+    return 'Este participante não conectou. O backend não forneceu um relay TURN; algumas redes bloqueiam conexões diretas.';
+  }
+  return 'Este participante não conectou. O backend forneceu credenciais TURN, mas o uso de relay ainda não foi confirmado; confira o diagnóstico e a rede.';
 }
 
 function attachRemoteTrack(socketId, track, stream) {
@@ -579,6 +680,8 @@ function removePeer(socketId) {
 }
 
 function closePeers() {
+  clearInterval(app.diagnosticsTimer);
+  app.diagnosticsTimer = null;
   for (const timer of app.peerRetryTimers.values()) clearTimeout(timer);
   app.peerRetryTimers.clear();
   app.peerRetryAttempts.clear();
@@ -592,6 +695,7 @@ function closePeers() {
   app.remoteVideoTracks.clear();
   app.remoteScreenStreamIds.clear();
   app.selectedRemoteVideoTracks.clear();
+  updatePeerDiagnostics();
   for (const tile of document.querySelectorAll('.remote-tile')) {
     tile.querySelector('video').srcObject = null;
     tile.querySelector('audio').srcObject = null;
@@ -981,16 +1085,76 @@ function setTheme(theme) {
 }
 
 async function loadIceServers() {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12_000);
   try {
-    const response = await fetch(`${apiUrl}/api/ice-servers`);
-    if (!response.ok) throw new Error(`ICE configuration returned ${response.status}`);
-    const config = await response.json();
+    const response = await fetch(`${apiUrl}/api/ice-servers`, { signal: controller.signal });
+    let config;
+    try {
+      config = await response.json();
+    } catch {
+      throw new Error('invalid_response');
+    }
+    if (!response.ok) throw new Error(config?.error || 'provider_unavailable');
+    const validation = validateIceServers(config?.iceServers);
+    if (!validation.valid || (config.turnConfigured === true && !validation.hasTurn)) {
+      throw new Error('invalid_response');
+    }
     app.iceServers = config.iceServers;
-    app.turnConfigured = Boolean(config.turnConfigured);
-    $('#network-warning').classList.toggle('hidden', Boolean(config.turnConfigured));
+    app.turnConfigured = validation.hasTurn && config.turnConfigured === true;
+    app.iceConfigurationMessage = app.turnConfigured
+      ? 'TURN configurado pelo backend; o relay só será confirmado se aparecer como candidato selecionado.'
+      : 'Erro: o backend respondeu sem servidores TURN; somente conexões diretas/STUN estão disponíveis.';
   } catch (error) {
-    console.warn('Using STUN fallback:', error);
-    $('#network-warning').textContent = 'Não foi possível consultar o servidor de mídia. Confira ALLOWED_ORIGINS e o status do backend.';
-    $('#network-warning').classList.remove('hidden');
+    const code = error.message;
+    app.iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+    app.turnConfigured = false;
+    app.iceConfigurationMessage = `Erro: ${iceConfigurationErrorMessage(code)}`;
+    console.warn('ICE configuration unavailable; using STUN fallback:', iceConfigurationErrorMessage(code));
+  } finally {
+    clearTimeout(timeout);
   }
+
+  $('#ice-configuration-status').textContent = app.iceConfigurationMessage;
+  $('#network-warning').textContent = app.iceConfigurationMessage.startsWith('Erro:')
+    ? `${app.iceConfigurationMessage} Algumas redes podem bloquear a chamada.`
+    : app.turnConfigured
+      ? ''
+      : 'TURN não está configurado. Algumas redes podem bloquear conexões diretas.';
+  $('#network-warning').classList.toggle('hidden', app.turnConfigured);
+}
+
+function iceConfigurationErrorMessage(code) {
+  if (code === 'metered_turn_configuration_incomplete') return 'a configuração do Metered está incompleta no backend.';
+  if (code === 'metered_turn_endpoint_invalid') return 'a URL do endpoint TURN do Metered está inválida.';
+  if (code === 'metered_turn_https_required') return 'o endpoint TURN exige HTTPS.';
+  if (code === 'metered_turn_invalid_response') return 'o Metered não retornou servidores TURN válidos.';
+  if (code === 'turn_provider_unavailable') return 'não foi possível obter credenciais TURN do Metered.';
+  if (code === 'invalid_response') return 'a configuração ICE recebida do backend é inválida.';
+  if (code === 'AbortError') return 'o backend demorou para responder à configuração ICE.';
+  return 'não foi possível consultar a configuração ICE do backend.';
+}
+
+function validateIceServers(value) {
+  if (!Array.isArray(value) || value.length === 0) return { valid: false, hasTurn: false };
+  let hasTurn = false;
+  for (const server of value) {
+    if (!server || typeof server !== 'object' || Array.isArray(server)) return { valid: false, hasTurn: false };
+    const urls = typeof server.urls === 'string' ? [server.urls] : server.urls;
+    if (!Array.isArray(urls) || urls.length === 0 || !urls.every((url) => typeof url === 'string')) {
+      return { valid: false, hasTurn: false };
+    }
+    const turnUrls = urls.filter((url) => /^turns?:/i.test(url));
+    if (turnUrls.length) {
+      hasTurn = true;
+      if (
+        typeof server.username !== 'string' || !server.username ||
+        typeof server.credential !== 'string' || !server.credential
+      ) return { valid: false, hasTurn: false };
+    }
+    if (urls.some((url) => !/^(stun|stuns|turn|turns):/i.test(url))) {
+      return { valid: false, hasTurn: false };
+    }
+  }
+  return { valid: true, hasTurn };
 }

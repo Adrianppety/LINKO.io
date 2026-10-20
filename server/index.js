@@ -34,7 +34,60 @@ app.use((request, response, next) => {
 });
 
 app.get('/health', (_request, response) => response.json({ status: 'ok' }));
-app.get('/api/ice-servers', (_request, response) => {
+app.get('/api/ice-servers', async (_request, response) => {
+  const meteredCredentialsUrl = process.env.METERED_TURN_CREDENTIALS_URL;
+  const meteredApiKey = process.env.METERED_TURN_API_KEY;
+  if (meteredCredentialsUrl || meteredApiKey) {
+    if (!meteredCredentialsUrl || !meteredApiKey) {
+      return response.status(503).json({ error: 'metered_turn_configuration_incomplete' });
+    }
+
+    let credentialsUrl;
+    try {
+      credentialsUrl = new URL(meteredCredentialsUrl);
+    } catch {
+      return response.status(503).json({ error: 'metered_turn_endpoint_invalid' });
+    }
+    if (credentialsUrl.protocol !== 'https:') {
+      return response.status(503).json({ error: 'metered_turn_https_required' });
+    }
+    if (
+      !credentialsUrl.hostname.endsWith('.metered.live') ||
+      credentialsUrl.pathname.replace(/\/+$/, '') !== '/api/v1/turn/credentials'
+    ) {
+      return response.status(503).json({ error: 'metered_turn_endpoint_invalid' });
+    }
+
+    credentialsUrl.searchParams.set('apiKey', meteredApiKey);
+    let upstream;
+    try {
+      upstream = await fetch(credentialsUrl, {
+        redirect: 'error',
+        signal: AbortSignal.timeout(10_000)
+      });
+    } catch {
+      console.error('TURN provider request failed: network or timeout');
+      return response.status(502).json({ error: 'turn_provider_unavailable' });
+    }
+    if (!upstream.ok) {
+      console.error(`TURN provider request failed with HTTP ${upstream.status}`);
+      return response.status(502).json({ error: 'turn_provider_unavailable' });
+    }
+
+    let meteredIceServers;
+    try {
+      meteredIceServers = await upstream.json();
+    } catch {
+      return response.status(502).json({ error: 'metered_turn_invalid_response' });
+    }
+    const validation = validateIceServers(meteredIceServers);
+    if (!validation.valid || !validation.hasTurn) {
+      console.error('TURN provider returned an invalid ICE server list');
+      return response.status(502).json({ error: 'metered_turn_invalid_response' });
+    }
+    return response.json({ iceServers: meteredIceServers, turnConfigured: true });
+  }
+
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   const turnUrls = (process.env.TURN_URLS || '').split(',').map((url) => url.trim()).filter(Boolean);
   const turnSecret = process.env.TURN_SHARED_SECRET;
@@ -45,7 +98,7 @@ app.get('/api/ice-servers', (_request, response) => {
     const credential = crypto.createHmac('sha1', turnSecret).update(username).digest('base64');
     iceServers.push({ urls: turnUrls, username, credential });
   }
-  response.json({ iceServers, turnConfigured: turnUrls.length > 0 });
+  response.json({ iceServers, turnConfigured: turnUrls.some((url) => /^turns?:/i.test(url)) });
 });
 
 const roomExpiry = setInterval(() => rooms.prune(), 60_000);
@@ -156,6 +209,32 @@ function isRecord(value) {
 
 function isValidMediaStreamId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function validateIceServers(value) {
+  if (!Array.isArray(value) || value.length === 0) return { valid: false, hasTurn: false };
+  let hasTurn = false;
+  for (const server of value) {
+    if (!isRecord(server)) return { valid: false, hasTurn: false };
+    const urls = typeof server.urls === 'string' ? [server.urls] : server.urls;
+    if (!Array.isArray(urls) || urls.length === 0 || !urls.every((url) => typeof url === 'string')) {
+      return { valid: false, hasTurn: false };
+    }
+    const turnUrls = urls.filter((url) => /^turns?:/i.test(url));
+    if (turnUrls.length) {
+      hasTurn = true;
+      if (
+        typeof server.username !== 'string' ||
+        !server.username ||
+        typeof server.credential !== 'string' ||
+        !server.credential
+      ) return { valid: false, hasTurn: false };
+    }
+    if (urls.some((url) => !/^(stun|stuns|turn|turns):/i.test(url))) {
+      return { valid: false, hasTurn: false };
+    }
+  }
+  return { valid: true, hasTurn };
 }
 
 function reply(acknowledge, response) {
