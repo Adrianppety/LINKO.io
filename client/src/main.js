@@ -43,34 +43,16 @@ const app = {
 };
 
 document.querySelector('#app').innerHTML = `
-  <div class="app-frame">
-    <aside class="nav-rail" aria-label="Navegação rápida">
-      <a class="rail-brand" href="/" aria-label="LINKO.IO início"><img src="/linko-wordmark.png" alt="" /></a>
-      <span class="rail-badge" title="Compartilhamento até 4K/60 quando suportado">até 4K/60</span>
-      <nav class="rail-links">
-        <a class="rail-link active" href="/" title="Início" aria-label="Início">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>
-        </a>
-        <button class="rail-link" type="button" data-scroll-target="video-grid" title="Participantes" aria-label="Ir para participantes">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a6 6 0 0 1 12 0v1zm13-13a3 3 0 0 1 0 6m2 2a5 5 0 0 1 3 5"/></svg>
-        </button>
-        <button class="rail-link" type="button" data-scroll-target="youtube-card" title="YouTube" aria-label="Ir para YouTube">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/></svg>
-        </button>
-        <button class="rail-link" type="button" data-scroll-target="nickname" title="Criar ou entrar em uma sala" aria-label="Criar ou entrar em uma sala">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        </button>
-      </nav>
-      <button class="rail-link rail-settings" id="open-theme-settings" type="button" title="Configurações de tema" aria-label="Configurações de tema">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4 1.4-1.1a7 7 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a7 7 0 0 1 0 2z"/></svg>
-      </button>
-    </aside>
-    <main class="shell">
+  <main class="shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Linko início"><img src="/linko-wordmark.png" alt="Linko" /></a>
       <div class="topbar-tools">
         <span class="topbar-note"><i></i> Salas temporárias, sem cadastro</span>
         <a class="bug-report" href="https://github.com/Adrianppety/LINKO.io/issues/new?template=bug_report.yml" target="_blank" rel="noopener noreferrer">Relatar bug</a>
+        <button class="theme-trigger" id="open-theme-settings" type="button" aria-haspopup="dialog" aria-controls="theme-dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4 1.4-1.1a7 7 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a7 7 0 0 1 0 2z"/></svg>
+          Tema
+        </button>
       </div>
     </header>
     <section class="home card" id="home">
@@ -82,7 +64,7 @@ document.querySelector('#app').innerHTML = `
       <form class="join-form" id="join-form">
         <label for="nickname">Como podemos chamar você?</label>
         <input id="nickname" name="nickname" maxlength="20" autocomplete="nickname" placeholder="Seu nome ou apelido" required />
-        <button class="button primary" id="join-button" type="submit">Criar sala <span aria-hidden="true">↗</span></button>
+        <button class="button primary" id="join-button" type="submit">Conectar <span aria-hidden="true">↗</span></button>
         <p class="form-hint" id="room-hint">Até 10 pessoas por sala. Sem conta e sem senha.</p>
         <p class="error" id="home-error" role="alert"></p>
       </form>
@@ -190,22 +172,53 @@ document.querySelector('#app').innerHTML = `
           </header>
           <section class="updates-section">
             <h3>O que já fizemos</h3>
-            <ul>
-              <li>Compartilhamento de tela com perfis de qualidade, incluindo até 60 FPS quando o dispositivo e a rede suportam.</li>
-              <li>Botão para tirar o vídeo do YouTube da sala para todos.</li>
-              <li>Convite para apoiar o projeto com uma estrela no GitHub.</li>
-              <li>Layout responsivo para celular, com controles reorganizados e painel do YouTube adaptado a telas menores.</li>
-              <li>Navegação lateral com atalhos para participantes, YouTube e entrada rápida em salas por link.</li>
-              <li>Dock de áudio, câmera e compartilhamento separado do palco, com indicadores visuais de estado.</li>
-              <li>Temas escuros Gamer neon e Escuro dourado, com escolha inicial e preferência salva.</li>
-            </ul>
+            <div class="updates-list">
+              <article class="update-item">
+                <h4>Layout responsivo</h4>
+                <p>Interface adaptada para celulares e telas menores, sem rolagem horizontal.</p>
+              </article>
+              <article class="update-item">
+                <h4>Novas cores escuras</h4>
+                <p>Gamer neon com preto, verde e roxo; Escuro dourado com grafite, verde e dourado. O tema escolhido fica salvo.</p>
+              </article>
+              <article class="update-item">
+                <h4>Entrada mais direta</h4>
+                <p>Botão Conectar para criar uma sala ou entrar pelo link, sem barra lateral.</p>
+              </article>
+              <article class="update-item">
+                <h4>Tema no topo</h4>
+                <p>A escolha de tema fica no canto superior direito.</p>
+              </article>
+              <article class="update-item">
+                <h4>Controles separados</h4>
+                <p>Áudio, câmera e compartilhamento ficam em grupos próprios no dock de mídia.</p>
+              </article>
+              <article class="update-item">
+                <h4>Compartilhamento de tela</h4>
+                <p>Perfis de qualidade, incluindo até 60 FPS quando o dispositivo e a rede suportam.</p>
+              </article>
+              <article class="update-item">
+                <h4>YouTube da sala</h4>
+                <p>Agora é possível tirar o vídeo para todos os participantes.</p>
+              </article>
+              <article class="update-item">
+                <h4>Apoie o LINKO.IO</h4>
+                <p>Adicionamos um convite para deixar uma estrela no GitHub.</p>
+              </article>
+            </div>
           </section>
           <section class="updates-section">
             <h3>Próximas melhorias</h3>
-            <ul>
-              <li>Deixar mais claros os estados da sala, como conexão e câmera desligada.</li>
-              <li>Simplificar os controles de compartilhamento e explicar os perfis de qualidade.</li>
-            </ul>
+            <div class="updates-list">
+              <article class="update-item">
+                <h4>Estados da sala</h4>
+                <p>Deixar mais claros estados como conexão e câmera desligada.</p>
+              </article>
+              <article class="update-item">
+                <h4>Qualidade de compartilhamento</h4>
+                <p>Simplificar os controles e explicar melhor os perfis disponíveis.</p>
+              </article>
+            </div>
           </section>
         </div>
       </dialog>
@@ -231,8 +244,7 @@ document.querySelector('#app').innerHTML = `
         </div>
       </div>
     </dialog>
-    </main>
-  </div>`;
+  </main>`;
 
 const $ = (selector) => document.querySelector(selector);
 const home = $('#home');
@@ -266,23 +278,6 @@ for (const button of document.querySelectorAll('[data-theme-choice]')) {
     themeDialog.close();
   });
 }
-for (const link of document.querySelectorAll('[data-scroll-target]')) {
-  link.addEventListener('click', () => {
-    const target = document.getElementById(link.dataset.scrollTarget);
-    if (target?.getClientRects().length) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (target.id === 'nickname') target.focus({ preventScroll: true });
-      return;
-    }
-    if (target?.id === 'nickname' && !room.classList.contains('hidden')) {
-      leaveRoom(true);
-      target.focus({ preventScroll: true });
-      return;
-    }
-    showToast('Crie ou entre em uma sala para acessar esta área.');
-  });
-}
-
 let savedTheme = 'gamer';
 let hasSavedTheme = false;
 try {
@@ -298,7 +293,7 @@ setTheme(savedTheme);
 if (!hasSavedTheme) themeDialog.showModal();
 
 if (roomFromUrl) {
-  $('#join-button').innerHTML = 'Entrar na sala <span aria-hidden="true">↗</span>';
+  $('#join-button').innerHTML = 'Conectar <span aria-hidden="true">↗</span>';
   $('#room-hint').textContent = 'Digite seu nome para entrar. Você não precisa criar uma conta.';
 }
 

@@ -61,16 +61,6 @@ button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hidden { display: none !important; }
-.app-frame { display: grid; grid-template-columns: 72px minmax(0, 1fr); min-width: 0; min-height: 100vh; background: var(--bg); }
-.nav-rail { position: sticky; top: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; height: 100vh; padding: 18px 10px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 88%, transparent); }
-.rail-brand { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 13px; background: var(--soft); }
-.rail-brand img { display: block; width: 40px; height: auto; }
-.rail-badge { padding: 4px 6px; border: 1px solid var(--selected-border); border-radius: 7px; color: var(--accent-dark); font: 700 8px "DM Mono", monospace; }
-.rail-links { display: grid; gap: 9px; margin-top: 10px; }
-.rail-link { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid transparent; border-radius: 13px; color: var(--muted); background: transparent; text-decoration: none; transition: color .15s ease, background .15s ease, border-color .15s ease; }
-.rail-link svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
-.rail-link:hover, .rail-link.active { border-color: var(--selected-border); color: var(--accent-dark); background: var(--selected-bg); }
-.rail-settings { margin-top: auto; }
 .shell { width: min(1440px, 100%); min-width: 0; margin: 0 auto; padding: 26px clamp(18px, 3vw, 46px) 42px; }
 .topbar { height: 54px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 34px; }
 .brand { display: inline-flex; align-items: center; padding: 5px 8px; border-radius: 7px; background: #101111; }
@@ -79,8 +69,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .topbar-note { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
 .topbar-note i, .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #d6d5ce; }
 .topbar-note i { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
-.theme-picker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
-.theme-picker select { width: 94px; height: 32px; padding: 0 8px; font-size: 10px; }
+.theme-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--soft); font-size: 11px; font-weight: 700; }
+.theme-trigger:hover { border-color: var(--theme-glow); }
+.theme-trigger svg { width: 16px; height: 16px; fill: none; stroke: var(--accent-dark); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.theme-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
 :root[data-theme="gamer"] .card { border-color: #a855f733; }
 .home { min-height: 510px; display: grid; grid-template-columns: 1.15fr .85fr; align-items: center; gap: 64px; padding: clamp(30px, 8vw, 96px); }
@@ -193,9 +185,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .updates-header h2 { margin: 5px 0 0; font-size: 23px; letter-spacing: -.04em; }
 .updates-close { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--soft); font-size: 22px; line-height: 1; }
 .updates-section + .updates-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
-.updates-section h3 { margin: 0 0 10px; font-size: 13px; }
-.updates-section ul { display: grid; gap: 10px; margin: 0; padding-left: 19px; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.updates-section li::marker { color: var(--accent-dark); }
+.updates-section h3 { margin: 0 0 12px; font-size: 13px; }
+.updates-list { display: grid; gap: 9px; }
+.update-item { padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--soft); }
+.update-item h4 { margin: 0 0 4px; color: var(--accent-dark); font-size: 11px; }
+.update-item p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .theme-options { display: grid; gap: 10px; }
 .theme-option { display: grid; grid-template-columns: 38px minmax(0, 1fr) 18px; align-items: center; gap: 12px; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--soft); text-align: left; }
 .theme-option:hover, .theme-option[aria-pressed="true"] { border-color: var(--theme-glow); }
@@ -219,22 +213,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .youtube-note { grid-column: 1; }
 }
 @media (max-width: 600px) {
-  .app-frame { width: 100%; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .nav-rail { position: sticky; z-index: 4; top: 0; flex-direction: row; justify-content: flex-start; width: 100%; min-width: 0; height: 58px; padding: 7px 14px; overflow: hidden; border-right: 0; border-bottom: 1px solid var(--line); }
-  .rail-brand { width: 42px; height: 42px; }
-  .rail-brand img { width: 36px; }
-  .rail-badge, .rail-link[data-scroll-target="video-grid"] { display: none; }
-  .rail-links { display: flex; gap: 5px; margin: 0 auto 0 0; }
-  .rail-link { flex: 0 0 36px; width: 36px; height: 38px; }
-  .rail-settings { margin: 0 0 0 auto; }
   .shell { width: 100%; padding: 14px 14px 28px; }
   .topbar { height: auto; flex-wrap: wrap; row-gap: 12px; margin-bottom: 20px; }
   .brand img { width: 95px; }
   .topbar-tools { flex: 1 0 100%; justify-content: space-between; gap: 7px; }
   .topbar-note { gap: 6px; font-size: 10px; }
   .bug-report { min-height: 36px; padding: 0 8px; font-size: 10px; }
-  .theme-picker { gap: 4px; }
-  .theme-picker select { width: 84px; }
+  .theme-trigger { min-height: 36px; padding: 0 9px; font-size: 10px; }
   .home { min-height: 0; grid-template-columns: 1fr; gap: 26px; padding: 32px 23px; }
   .home h1 { font-size: 48px; }
   .room-header { align-items: flex-start; flex-direction: column; padding: 17px; }
